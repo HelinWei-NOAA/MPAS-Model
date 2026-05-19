@@ -2,6 +2,9 @@ module mpas_satmedmfvdifq_wrapper_mod
 
   use mpas_kind_types, only: RKIND
   use satmedmfvdifq, only: satmedmfvdifq_run
+  use mpas_sfc_diff_wrapper_mod, only: gfs_sfcl_available,              &
+       gfs_sfcl_garea, gfs_sfcl_zvfun, gfs_sfcl_zorl,                  &
+       gfs_sfcl_rb_lnd, gfs_sfcl_fm_lnd, gfs_sfcl_fh_lnd
   implicit none
 
   type mpas_satmedmfvdifq_config_type
@@ -221,12 +224,22 @@ contains
     enddo
 
     do i = 1, im
-      garea(i) = areaCell(i)
+      if (gfs_sfcl_available .and. allocated(gfs_sfcl_garea) .and. &
+          size(gfs_sfcl_garea) >= im) then
+        garea(i) = gfs_sfcl_garea(i)
+      else
+        garea(i) = areaCell(i)
+      endif
 
       xmu(i) = max(coszen(i), 0.0_RKIND)
 
       ! UFS code uses z0 = 0.01*zorl, so zorl is in cm.
-      zorl(i) = max(z0_mpas(i), 1.0e-6_RKIND) * 100.0_RKIND
+      if (gfs_sfcl_available .and. allocated(gfs_sfcl_zorl) .and. &
+          size(gfs_sfcl_zorl) >= im) then
+        zorl(i) = max(gfs_sfcl_zorl(i), 1.0e-6_RKIND) * 100.0_RKIND
+      else
+        zorl(i) = max(z0_mpas(i), 1.0e-6_RKIND) * 100.0_RKIND
+      endif
 
       tsea(i) = skin_temp(i)
       heat(i) = shflx(i)/cp
@@ -239,9 +252,16 @@ contains
 
       u10m(i) = u10(i)
       v10m(i) = v10(i)
-      rbsoil(i) = rb_in(i)
-      fm(i) = max(fm_in(i), 1.0e-6_RKIND)
-      fh(i) = max(fh_in(i), 1.0e-6_RKIND)
+      if (gfs_sfcl_available .and. allocated(gfs_sfcl_rb_lnd) .and. &
+          size(gfs_sfcl_rb_lnd) >= im) then
+        rbsoil(i) = gfs_sfcl_rb_lnd(i)
+        fm(i) = max(gfs_sfcl_fm_lnd(i), 1.0e-6_RKIND)
+        fh(i) = max(gfs_sfcl_fh_lnd(i), 1.0e-6_RKIND)
+      else
+        rbsoil(i) = rb_in(i)
+        fm(i) = max(fm_in(i), 1.0e-6_RKIND)
+        fh(i) = max(fh_in(i), 1.0e-6_RKIND)
+      endif
 
       ! If MPAS does not have rbsoil, start neutral.
 !     rbsoil(i) = 0.0_RKIND
@@ -258,13 +278,18 @@ contains
 
 ! z0 from MPAS is in meters; UFS uses zorl in cm
 ! Here we stay consistent with MPAS units (meters)
-      tem1 = (z0_mpas(i) - z0lo) / (z0up - z0lo)
+      if (gfs_sfcl_available .and. allocated(gfs_sfcl_zvfun) .and. &
+          size(gfs_sfcl_zvfun) >= im) then
+        zvfun(i) = gfs_sfcl_zvfun(i)
+      else
+        tem1 = (z0_mpas(i) - z0lo) / (z0up - z0lo)
 ! limit between 0 and 1
-      tem1 = min(max(tem1, 0.0_RKIND), 1.0_RKIND)
+        tem1 = min(max(tem1, 0.0_RKIND), 1.0_RKIND)
 ! ensure minimum vegetation fraction
-      tem2 = max(sigmaf(i), 0.1_RKIND)
+        tem2 = max(sigmaf(i), 0.1_RKIND)
 ! final function
-      zvfun(i) = sqrt(tem1 * tem2)
+        zvfun(i) = sqrt(tem1 * tem2)
+      endif
 
       ! No inversion limiter initially.
       kinver(i) = km
@@ -299,7 +324,11 @@ contains
 
     do k = 1, km
       do i = 1, im
-        ten_t_out(i,k) = tdt(i,k)
+       if (exner_mid(i,k) > 1.0e-6_RKIND) then
+        ten_t_out(i,k) = tdt(i,k) / exner_mid(i,k)
+       else
+        ten_t_out(i,k) = 0.0_RKIND
+       endif
         ten_u_out(i,k) = du(i,k)
         ten_v_out(i,k) = dv(i,k)
         

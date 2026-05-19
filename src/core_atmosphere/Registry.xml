@@ -435,6 +435,7 @@
                 <package name="bl_mynn_in" description="parameterization of MYNN Planetary Boundary Layer."/>
                 <package name="bl_mynnedmf_in" description="parameterization of MYNN-EDMF Planetary Boundary Layer."/>
                 <package name="bl_tke_edmf_in" description="parameterization of GFS-UFS TKE-EDMF Planetary Boundary Layer."/>
+                <package name="gfs_sfcl_in" description="parameterization of GFS/UFS surface layer scheme."/>
                 <package name="sf_noahmp_in" description="parameterization of NOAH-MP land surface scheme."/>
 		<package name="bl_myj_in" description="parameterization of MYJ Planetary Boundary Layer."/>
                 <package name="lsm_ruc_in" description="parameterization of the RUC land surface."/>
@@ -2814,7 +2815,7 @@
                 <nml_option name="config_sfclayer_scheme" type="character" default_value="suite" in_defaults="false"
                      units="-"
                      description="configuration for surface layer-scheme"
-                     possible_values="`suite',`sf_monin_obukhov','sf_monin_obukhov_rev',`sf_mynn',`sf_mynnsfclay',`sf_myj', `off'"/>
+                     possible_values="`suite',`sf_monin_obukhov','sf_monin_obukhov_rev',`sf_mynn',`sf_mynnsfclay',`sf_myj', `gfs_sfcl', `off'"/>
 
 		<nml_option name="config_mynn_sfcflux_land" type="integer" default_value="1" in_defaults="false"
                      units="-"

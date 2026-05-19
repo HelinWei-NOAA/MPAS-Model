@@ -21,6 +21,7 @@
  use sf_mynn,only: sf_mynn_init
  use sf_sfclayrev,only: sf_sfclayrev_init
  use module_sf_myjsfc
+ use mpas_sfc_diff_wrapper_mod, only: mpas_call_sfc_diff
 
  implicit none
  private
@@ -265,6 +266,15 @@
           if(.not.allocated(pshltr_sea)) allocate(pshltr_sea(ims:ime,jms:jme) )
       endif
 
+
+    case("gfs_sfcl")
+       if(.not.allocated(fh_p)) allocate(fh_p(ims:ime,jms:jme))
+       if(.not.allocated(fm_p)) allocate(fm_p(ims:ime,jms:jme))
+       if(config_frac_seaice) then
+          if(.not.allocated(fh_sea)) allocate(fh_sea(ims:ime,jms:jme))
+          if(.not.allocated(fm_sea)) allocate(fm_sea(ims:ime,jms:jme))
+       endif
+
     case default
 
  end select sfclayer_select
@@ -424,6 +434,15 @@
           if(allocated(q10_sea)   ) deallocate(q10_sea    )
           if(allocated(pshltr_sea)) deallocate(pshltr_sea )
        endif
+
+    case("gfs_sfcl")
+       if(allocated(fh_p)) deallocate(fh_p)
+       if(allocated(fm_p)) deallocate(fm_p)
+       if(config_frac_seaice) then
+          if(allocated(fh_sea)) deallocate(fh_sea)
+          if(allocated(fm_sea)) deallocate(fm_sea)
+       endif
+
     case default
 
  end select sfclayer_select
@@ -624,7 +643,7 @@
 
  sfclayer_select: select case (trim(sfclayer_scheme))
 
-    case("sf_monin_obukhov","sf_monin_obukhov_rev")
+    case("sf_monin_obukhov","sf_monin_obukhov_rev","gfs_sfcl")
        call mpas_pool_get_array(diag_physics,'fh',fh)
        call mpas_pool_get_array(diag_physics,'fm',fm)
 
@@ -929,7 +948,7 @@
 
  sfclayer_select: select case (trim(sfclayer_scheme))
 
-    case("sf_monin_obukhov","sf_monin_obukhov_rev")
+    case("sf_monin_obukhov","sf_monin_obukhov_rev","gfs_sfcl")
        call mpas_pool_get_array(diag_physics,'fh',fh)
        call mpas_pool_get_array(diag_physics,'fm',fm)
 
@@ -1164,6 +1183,7 @@
  character(len=StrKIND),pointer:: lsm_scheme
  integer,pointer:: sf_mynn_sfcflux_land,sf_mynn_sfcflux_water
  real(kind=RKIND),dimension(:),pointer:: areaCell
+ integer,dimension(:),pointer:: ivgtyp_gfs_sfcl
 
 !local variables:
  integer:: initflag
@@ -1187,6 +1207,7 @@
  call mpas_pool_get_config(configs,'config_do_DAcycling'   ,config_do_DAcycling) 
       
  call mpas_pool_get_array(mesh,'areaCell',areaCell)
+ call mpas_pool_get_array(sfc_input   ,'ivgtyp',ivgtyp_gfs_sfcl)
 
 !copy all MPAS arrays to rectanguler grid:
  call sfclayer_from_MPAS(configs,mesh,diag_physics,sfc_input,its,ite)
@@ -1512,6 +1533,49 @@
                           )
         endif
          call mpas_timer_stop('sf_myj')
+
+    case("gfs_sfcl")
+
+       call mpas_timer_start('gfs_sfcl')
+
+       call mpas_call_sfc_diff( &
+            num_cells = (ite-its+1),                                  &
+            num_lev   = (kte-kts+1),                                  &
+            dt        = 0.0_RKIND,                                    &
+            areaCell  = areaCell(its:ite),                            &
+            psfc      = psfc_p(its:ite,jts),                          &
+            t1        = t_p(its:ite,kts,jts),                         &
+            q1        = qv_p(its:ite,kts,jts),                        &
+            z1        = dz_p(its:ite,kts,jts),                        &
+            wspd      = wspd_p(its:ite,jts),                          &
+            prsl1     = pres_hyd_p(its:ite,kts,jts),                  &
+            prslki    = pi_p(its:ite,kts,jts),                        &
+            prsik1    = pi_p(its:ite,kts,jts),                        &
+            prslk1    = pi_p(its:ite,kts,jts),                        &
+            sigmaf    = max(0.0_RKIND,min(1.0_RKIND,mavail_p(its:ite,jts))), &
+            vegtype   = ivgtyp_gfs_sfcl(its:ite),                     &
+            shdmax    = max(0.0_RKIND,min(1.0_RKIND,mavail_p(its:ite,jts))), &
+            ivegsrc   = 1,                                            &
+            xland     = xland_p(its:ite,jts),                         &
+            xice      = xice_p(its:ite,jts),                          &
+            znt       = znt_p(its:ite,jts),                           &
+            z0h       = gz1oz0_p(its:ite,jts),                        &
+            tsk       = tsk_p(its:ite,jts),                           &
+            u10       = u10_p(its:ite,jts),                           &
+            v10       = v10_p(its:ite,jts),                           &
+            fm        = fm_p(its:ite,jts),                            &
+            fh        = fh_p(its:ite,jts),                            &
+            cm        = cd_p(its:ite,jts),                            &
+            ch        = ck_p(its:ite,jts),                            &
+            stress    = ust_p(its:ite,jts),                           &
+            rb_lnd_out= br_p(its:ite,jts),                            &
+            errmsg    = errmsg,                                       &
+            errflg    = errflg )
+
+       call mpas_timer_stop('gfs_sfcl')
+
+
+
     case default
 
  end select sfclayer_select

@@ -1,4 +1,4 @@
-.SUFFIXES: .F .o
+.SUFFIXES: .F .f .o
 
 OBJS = \
 	gfs_tke_edmf_compat.o \
@@ -6,6 +6,7 @@ OBJS = \
 	mfpbltq_mod.o         \
 	mfscuq_mod.o          \
 	canopy_utils_mod.o    \
+	sfc_diff.o            \
 	satmedmfvdifq.o
 
 all: $(OBJS)
@@ -29,6 +30,9 @@ mfscuq_mod.o: \
 canopy_utils_mod.o: \
 	gfs_tke_edmf_compat.o
 
+sfc_diff.o: \
+	gfs_tke_edmf_compat.o
+
 satmedmfvdifq.o: \
 	gfs_tke_edmf_compat.o \
 	tridi_mod.o \
@@ -45,5 +49,9 @@ ifeq "$(GEN_F90)" "true"
 	$(CPP) $(CPPFLAGS) $(COREDEF) $(HYDROSTATIC) $(CPPINCLUDES) $< > $*.f90
 	$(FC) $(FFLAGS) -c $*.f90 $(FCINCLUDES) -I. -I.. -I../physics_mmm -I../physics_wrf -I../../../framework -I../../../external/esmf_time_f90
 else
-	$(FC) $(CPPFLAGS) $(COREDEF) $(HYDROSATIC) $(FFLAGS) -c $*.F $(CPPINCLUDES) $(FCINCLUDES) -I. -I.. -I../physics_mmm -I../physics_wrf -I../../../framework -I../../../external/esmf_time_f90
+	$(FC) $(CPPFLAGS) $(COREDEF) $(HYDROSTATIC) $(FFLAGS) -c $*.F $(CPPINCLUDES) $(FCINCLUDES) -I. -I.. -I../physics_mmm -I../physics_wrf -I../../../framework -I../../../external/esmf_time_f90
 endif
+
+.f.o:
+	$(RM) $@
+	$(FC) $(FFLAGS) -c $*.f $(FCINCLUDES) -I. -I.. -I../physics_mmm -I../physics_wrf -I../../../framework -I../../../external/esmf_time_f90
