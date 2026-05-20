@@ -261,6 +261,7 @@ contains
        gfs_sfcl_rb_lnd(i) = rb_lnd(i)
        gfs_sfcl_fm_lnd(i) = fm_lnd(i)
        gfs_sfcl_fh_lnd(i) = fh_lnd(i)
+       print*,'inside sfcl wrapper',gfs_sfcl_garea(i),gfs_sfcl_zvfun(i),gfs_sfcl_zorl(i),gfs_sfcl_rb_lnd(i),gfs_sfcl_fm_lnd(i),gfs_sfcl_fh_lnd(i)
     enddo
 
     gfs_sfcl_available = .true.

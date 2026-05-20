@@ -147,6 +147,8 @@
  if(.not.allocated(v10_p)   ) allocate(v10_p(ims:ime,jms:jme)   )
  if(.not.allocated(wspd_p)  ) allocate(wspd_p(ims:ime,jms:jme)  )
  if(.not.allocated(xland_p) ) allocate(xland_p(ims:ime,jms:jme) )
+ if(.not.allocated(vegfra_p)) allocate(vegfra_p(ims:ime,jms:jme))
+ if(.not.allocated(shdmax_p)) allocate(shdmax_p(ims:ime,jms:jme))
  if(.not.allocated(zol_p)   ) allocate(zol_p(ims:ime,jms:jme)   )
  if(.not.allocated(znt_p)   ) allocate(znt_p(ims:ime,jms:jme)   )
  if(.not.allocated(xice_p)  ) allocate(xice_p(ims:ime,jms:jme)  )
@@ -332,6 +334,8 @@
  if(allocated(v10_p)   ) deallocate(v10_p   )
  if(allocated(wspd_p)  ) deallocate(wspd_p  )
  if(allocated(xland_p) ) deallocate(xland_p )
+ if(allocated(vegfra_p)) deallocate(vegfra_p)
+ if(allocated(shdmax_p)) deallocate(shdmax_p)
  if(allocated(zol_p)   ) deallocate(zol_p   )
  if(allocated(znt_p)   ) deallocate(znt_p   )
  if(allocated(xice_p)  ) deallocate(xice_p  )
@@ -470,7 +474,7 @@
 
  real(kind=RKIND),pointer:: len_disp
  real(kind=RKIND),dimension(:),pointer:: meshDensity
- real(kind=RKIND),dimension(:),pointer:: skintemp,sst,xice,xland
+ real(kind=RKIND),dimension(:),pointer:: skintemp,sst,xice,xland,vegfra,shdmax
  real(kind=RKIND),dimension(:),pointer:: hpbl,mavail
  real(kind=RKIND),dimension(:),pointer:: br,cpm,chs,chs2,cqs2,flhc,flqc,gz1oz0,hfx,qfx,  &
                                          qgh,qsfc,lh,mol,psim,psih,regime,rmol,ust,ustm, &
@@ -501,7 +505,10 @@
  call mpas_pool_get_array(diag_physics,'mavail'  ,mavail  )
  call mpas_pool_get_array(sfc_input   ,'skintemp',skintemp)
  call mpas_pool_get_array(sfc_input   ,'xland'   ,xland   )
+ call mpas_pool_get_array(sfc_input   ,'vegfra'  ,vegfra  )
+ call mpas_pool_get_array(sfc_input   ,'shdmax'  ,shdmax  )
  call mpas_pool_get_array(sfc_input   ,'xice'    ,xice    )
+
       
 !inout variables:
  call mpas_pool_get_array(diag_physics,'br'      ,br      )
@@ -535,7 +542,9 @@
     hpbl_p(i,j)   = hpbl(i)
     mavail_p(i,j) = mavail(i)
     tsk_p(i,j)    = skintemp(i)
-    xland_p(i,j)  = xland(i)
+    tsk_p(i,j)    = skintemp(i)
+    vegfra_p(i,j) = vegfra(i)
+    shdmax_p(i,j) = shdmax(i)
     xice_p(i,j)   = xice(i)
       
     !inout variables:
@@ -1085,7 +1094,7 @@
  logical, parameter:: allowed_to_read = .false. !actually not used in subroutine sfclayinit or mjysfcinit.
  character(len=StrKIND),pointer:: sfclayer_scheme
  logical, pointer:: config_do_restart
- real, pointer, dimension(:):: ust, z0, xland, xice
+ real, pointer, dimension(:):: ust, z0, xland, vegfra, shdmax, xice
  integer, pointer, dimension(:) :: lowlyr,ivgtyp
  integer :: i, j
 
@@ -1114,6 +1123,17 @@
 
     case("sf_mynnsfclay")
        call mynnsfc_init(allowed_to_read,errmsg,errflg)
+    case("gfs_sfcl")
+       call mpas_pool_get_array(sfc_input, 'vegfra', vegfra)
+       call mpas_pool_get_array(sfc_input, 'shdmax', shdmax)
+       if (.not.allocated(vegfra_p) ) allocate(vegfra_p(ims:ime,jms:jme) )
+       if (.not.allocated(shdmax_p) ) allocate(shdmax_p(ims:ime,jms:jme) )
+       do j = jts,jte
+       do i = its,ite
+          vegfra_p(i,j)  = vegfra(i)
+          shdmax_p(i,j)  = shdmax(i)
+       enddo
+       enddo
        
     case("sf_myj") 
        call mpas_pool_get_config(configs,'config_do_restart'     ,config_do_restart )
@@ -1552,9 +1572,9 @@
             prslki    = pi_p(its:ite,kts,jts),                        &
             prsik1    = pi_p(its:ite,kts,jts),                        &
             prslk1    = pi_p(its:ite,kts,jts),                        &
-            sigmaf    = max(0.0_RKIND,min(1.0_RKIND,mavail_p(its:ite,jts))), &
+            sigmaf    = vegfra_p(its:ite,jts),                        &
             vegtype   = ivgtyp_gfs_sfcl(its:ite),                     &
-            shdmax    = max(0.0_RKIND,min(1.0_RKIND,mavail_p(its:ite,jts))), &
+            shdmax    = shdmax_p(its:ite,jts),                        &
             ivegsrc   = 1,                                            &
             xland     = xland_p(its:ite,jts),                         &
             xice      = xice_p(its:ite,jts),                          &

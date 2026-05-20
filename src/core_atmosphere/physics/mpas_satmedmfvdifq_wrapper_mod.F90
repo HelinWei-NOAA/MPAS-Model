@@ -234,6 +234,7 @@ contains
       xmu(i) = max(coszen(i), 0.0_RKIND)
 
       ! UFS code uses z0 = 0.01*zorl, so zorl is in cm.
+      print*,'debug here',gfs_sfcl_available,gfs_sfcl_zorl(i),gfs_sfcl_fm_lnd(i),gfs_sfcl_fh_lnd(i),fm_in(i),fh_in(i)
       if (gfs_sfcl_available .and. allocated(gfs_sfcl_zorl) .and. &
           size(gfs_sfcl_zorl) >= im) then
         zorl(i) = max(gfs_sfcl_zorl(i), 1.0e-6_RKIND) * 100.0_RKIND
@@ -292,6 +293,12 @@ contains
 ! final function
         zvfun(i) = sqrt(tem1 * tem2)
       endif
+             tem1 = (z0_mpas(i) - z0lo) / (z0up - z0lo)
+! limit between 0 and 1
+        tem1 = min(max(tem1, 0.0_RKIND), 1.0_RKIND)
+! ensure minimum vegetation fraction
+        tem2 = max(sigmaf(i), 0.1_RKIND)
+      print*,'debug here 2',gfs_sfcl_zvfun(i),sqrt(tem1 * tem2)
 
       ! No inversion limiter initially.
       kinver(i) = km
