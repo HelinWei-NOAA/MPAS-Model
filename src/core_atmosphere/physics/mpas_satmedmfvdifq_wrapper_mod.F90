@@ -10,7 +10,7 @@ module mpas_satmedmfvdifq_wrapper_mod
   type mpas_satmedmfvdifq_config_type
     logical :: sa3dtke      = .false.
     logical :: tte_edmf     = .false.
-    logical :: dspheat      = .false.
+    logical :: dspheat      = .true.
     logical :: use_oceanuv  = .false.
     logical :: do_canopy    = .false.
     logical :: cplaqm       = .false.
@@ -23,10 +23,10 @@ module mpas_satmedmfvdifq_wrapper_mod
 
     real(kind=RKIND) :: xkzm_m = 1.0_RKIND
     real(kind=RKIND) :: xkzm_h = 1.0_RKIND
-    real(kind=RKIND) :: xkzm_s = 0.7_RKIND
+    real(kind=RKIND) :: xkzm_s = 1.0_RKIND
     real(kind=RKIND) :: dspfac = 1.0_RKIND
-    real(kind=RKIND) :: bl_upfr = 1.0_RKIND
-    real(kind=RKIND) :: bl_dnfr = 1.0_RKIND
+    real(kind=RKIND) :: bl_upfr = 0.13_RKIND
+    real(kind=RKIND) :: bl_dnfr = 0.1_RKIND
     real(kind=RKIND) :: rlmx = 300.0_RKIND
     real(kind=RKIND) :: elmx = 300.0_RKIND
   end type mpas_satmedmfvdifq_config_type
@@ -121,7 +121,7 @@ contains
     real(kind=RKIND), allocatable :: dv(:,:), du(:,:), tdt(:,:)
     real(kind=RKIND), allocatable :: dtend(:,:,:)
     real(kind=RKIND), allocatable :: claie(:), cfch(:), cfrt(:), cclu(:), cpopu(:)
-    real(kind=RKIND) :: tem1, tem2
+    real(kind=RKIND) :: rho1, tem1, tem2
     integer, allocatable :: kpbl(:), kinver(:), dtidx(:,:)
 
     im = nCells
@@ -241,11 +241,13 @@ contains
         zorl(i) = max(z0_mpas(i), 1.0e-6_RKIND) * 100.0_RKIND
       endif
 
+      rho1 = prsl(i,1) / (rd * max(t1(i,1), 180.0_RKIND))
+
       tsea(i) = skin_temp(i)
-      heat(i) = shflx(i)/cp
+      heat(i) = shflx(i)/(rho1*cp)
 
       ! If MPAS gives latent heat flux W m-2, convert to kg m-2 s-1.
-      evap(i) = lhflx(i) / hvap
+      evap(i) = lhflx(i) / (rho1*hvap)
 
       stress(i) = max(stress_in(i), 0.0_RKIND)
       spd1(i) = max(sqrt(u1(i,1)**2 + v1(i,1)**2), 0.1_RKIND)
@@ -324,11 +326,7 @@ contains
 
     do k = 1, km
       do i = 1, im
-       if (exner_mid(i,k) > 1.0e-6_RKIND) then
         ten_t_out(i,k) = tdt(i,k) / exner_mid(i,k)
-       else
-        ten_t_out(i,k) = 0.0_RKIND
-       endif
         ten_u_out(i,k) = du(i,k)
         ten_v_out(i,k) = dv(i,k)
         

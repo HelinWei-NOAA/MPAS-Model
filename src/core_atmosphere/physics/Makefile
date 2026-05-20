@@ -178,6 +178,12 @@ mpas_atmphys_driver_oml.o: \
 	mpas_atmphys_landuse.o \
 	mpas_atmphys_vars.o
 
+mpas_sfc_diff_wrapper_mod.o: \
+	mpas_atmphys_constants.o \
+	mpas_atmphys_vars.o \
+	physics_gfs/sfc_diff.o\
+	mpas_atmphys_utilities.o
+
 # TKE-EDMF / SATMEDMF dependencies for MPAS application.
 # GFS/UFS science objects are built in physics_gfs/.
 mpas_satmedmfvdifq_wrapper_mod.o: \
@@ -186,10 +192,6 @@ mpas_satmedmfvdifq_wrapper_mod.o: \
 	mpas_atmphys_utilities.o \
 	mpas_sfc_diff_wrapper_mod.o
 
-mpas_sfc_diff_wrapper_mod.o: \
-	mpas_atmphys_constants.o \
-	mpas_atmphys_vars.o \
-	mpas_atmphys_utilities.o
 
 mpas_atmphys_driver_pbl.o: \
 	mpas_atmphys_constants.o \

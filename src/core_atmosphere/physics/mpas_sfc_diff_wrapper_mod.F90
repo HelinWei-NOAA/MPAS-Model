@@ -1,8 +1,9 @@
 module mpas_sfc_diff_wrapper_mod
 
   use mpas_kind_types, only: RKIND
+  use sfc_diff, only: sfc_diff_run
+
   implicit none
-  external :: sfc_diff_run
 
   public :: mpas_call_sfc_diff
   public :: gfs_sfcl_available

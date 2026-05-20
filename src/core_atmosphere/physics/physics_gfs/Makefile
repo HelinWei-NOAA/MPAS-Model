@@ -1,4 +1,4 @@
-.SUFFIXES: .F .f .o
+.SUFFIXES: .F .o
 
 OBJS = \
 	gfs_tke_edmf_compat.o \
@@ -45,13 +45,7 @@ clean:
 
 .F.o:
 	$(RM) $@ $*.mod
-ifeq "$(GEN_F90)" "true"
-	$(CPP) $(CPPFLAGS) $(COREDEF) $(HYDROSTATIC) $(CPPINCLUDES) $< > $*.f90
-	$(FC) $(FFLAGS) -c $*.f90 $(FCINCLUDES) -I. -I.. -I../physics_mmm -I../physics_wrf -I../../../framework -I../../../external/esmf_time_f90
-else
-	$(FC) $(CPPFLAGS) $(COREDEF) $(HYDROSTATIC) $(FFLAGS) -c $*.F $(CPPINCLUDES) $(FCINCLUDES) -I. -I.. -I../physics_mmm -I../physics_wrf -I../../../framework -I../../../external/esmf_time_f90
-endif
-
-.f.o:
-	$(RM) $@
-	$(FC) $(FFLAGS) -c $*.f $(FCINCLUDES) -I. -I.. -I../physics_mmm -I../physics_wrf -I../../../framework -I../../../external/esmf_time_f90
+	$(FC) $(CPPFLAGS) $(COREDEF) $(HYDROSTATIC) $(FFLAGS) -c $*.F \
+	$(CPPINCLUDES) $(FCINCLUDES) \
+	-I. -I.. -I../physics_mmm -I../physics_wrf \
+	-I../../../framework -I../../../external/esmf_time_f90
