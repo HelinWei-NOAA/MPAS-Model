@@ -133,10 +133,13 @@
 !     locals
 !
       integer   i
+      integer   nbad_input, nbad_output
+      integer, parameter :: debug_max_print = 20
+      logical, parameter :: debug_sfc_diff = .true.
       real(kind=kind_phys)  :: windrel
 !
       real(kind=kind_phys) :: rat, tv1, thv1, restar, wind10m,
-     &                        czilc, tem1, tem2, virtfac
+     &                        czilc, tem1, tem2, virtfac,windl
 !
 
       real(kind=kind_phys) :: tvs, z0, z0max, ztmax, gdx
@@ -169,14 +172,51 @@
 ! Initialize CCPP error handling variables
       errmsg = ''
       errflg = 0
+      nbad_input = 0
+      nbad_output = 0
+
+      if (debug_sfc_diff) then
+        print *, 'sfc_diff input min/max: ps=',minval(ps),maxval(ps),
+     &    ' t1=',minval(t1),maxval(t1),
+     &    ' q1=',minval(q1),maxval(q1),
+     &    ' z1=',minval(z1),maxval(z1)
+        print *, 'sfc_diff input min/max: wind=',minval(wind),
+     &    maxval(wind),' prsl1=',minval(prsl1),maxval(prsl1),
+     &    ' prslki=',minval(prslki),maxval(prslki)
+        print *, 'sfc_diff input min/max: sigmaf=',minval(sigmaf),
+     &    maxval(sigmaf),' shdmax=',minval(shdmax),maxval(shdmax),
+     &    ' z0lnd=',minval(z0rl_lnd),maxval(z0rl_lnd)
+        print *, 'sfc_diff input masks: dry/wet/icy count=',
+     &    count(dry),count(wet),count(icy)
+      endif
 
 !  initialize variables. all units are supposedly m.k.s. unless specified
 !  ps is in pascals, wind is wind speed,
 !  surface roughness length is converted to m from cm
 !
-!       write(0,*)'in sfc_diff, sfc_z0_type=',sfc_z0_type
+!       print *,'in sfc_diff, sfc_z0_type=',sfc_z0_type
 
       do i=1,im
+        if (debug_sfc_diff) then
+          if ((.not.(ps(i) == ps(i))) .or. ps(i) <= 0.0_kp .or.
+     &        abs(ps(i)) > 1.0e30_kp .or.
+     &        (.not.(t1(i) == t1(i))) .or. t1(i) < 150.0_kp .or.
+     &        t1(i) > 350.0_kp .or.
+     &        (.not.(q1(i) == q1(i))) .or. q1(i) < -1.0e-10_kp .or.
+     &        (.not.(z1(i) == z1(i))) .or. z1(i) <= 0.0_kp .or.
+     &        (.not.(wind(i) == wind(i))) .or. wind(i) <= 0.0_kp .or.
+     &        (.not.(prsl1(i) == prsl1(i))) .or. prsl1(i) <= 0.0_kp
+     &       ) then
+            nbad_input = nbad_input + 1
+            if (nbad_input <= debug_max_print) then
+              print *, 'BAD sfc_diff input i=',i,' ps=',ps(i),
+     &          ' t1=',t1(i),' q1=',q1(i),' z1=',z1(i),
+     &          ' wind=',wind(i),' prsl1=',prsl1(i),
+     &          ' dry/wet/icy=',dry(i),wet(i),icy(i)
+            endif
+          endif
+        endif
+
         if(flag_iter(i) .or. flag_lakefreeze(i)) then
 
           ! Need to initialize ztmax arrays
@@ -208,9 +248,9 @@
      &                     * virtfac
             endif
 
-            z0max = max(zmin, min(0.01_kp * z0rl_lnd(i), z1(i)))
+            z0max = max(zmin, min(z0rl_lnd(i), z1(i)))
 !** xubin's new z0  over land
-            tem1  = one - shdmax(i)
+            tem1  = one - shdmax(i)*0.01_kp
             tem2  = tem1 * tem1
             tem1  = one  - tem2
 
@@ -263,7 +303,7 @@
 !
             czilc = 10.0_kp ** (- 4.0_kp * z0max) ! Trier et al. (2011,WAF)
             czilc = max(min(czilc, 0.8_kp), 0.08_kp)
-            tem1 = 1.0_kp - sigmaf(i)
+            tem1 = 1.0_kp - sigmaf(i)*0.01_kp
             czilc = czilc * tem1 * tem1
             ztmax_lnd(i) = z0max * exp( - czilc * ca
      &            * 258.2_kp * sqrt(ustar_lnd(i)*z0max) )
@@ -278,12 +318,13 @@
 !
             tem1 = (z0max - z0lo) / (z0up - z0lo)
             tem1 = min(max(tem1, zero), 1.0_kp)
-            tem2 = max(sigmaf(i), 0.1_kp)
+            tem2 = max(sigmaf(i)*0.01_kp, 0.1_kp)
             zvfun(i) = sqrt(tem1 * tem2)
+            windl = max (wind(i),0.1_kp)
 !
             call stability
 !  ---  inputs:
-     &       (z1(i), zvfun(i), gdx, tv1, thv1, wind(i),
+     &       (z1(i), zvfun(i), gdx, tv1, thv1, windl,
      &        z0max, ztmax_lnd(i), tvs, grav, thsfc_loc,
 !  ---  outputs:
      &        rb_lnd(i), fm_lnd(i), fh_lnd(i), fm10_lnd(i), fh2_lnd(i),
@@ -303,7 +344,7 @@
 
             z0max = max(zmin, min(0.01_kp * z0rl_ice(i), z1(i)))
 !** xubin's new z0  over land and sea ice
-            tem1  = one - shdmax(i)
+            tem1  = one - shdmax(i)*0.01_kp
             tem2  = tem1 * tem1
             tem1  = one  - tem2
 
@@ -328,7 +369,7 @@
 !
             czilc = 10.0_kp ** (- 4.0_kp * z0max)
             czilc = max(min(czilc, 0.8_kp), 0.08_kp)
-            tem1 = 1.0_kp - sigmaf(i)
+            tem1 = 1.0_kp - sigmaf(i)*0.01_kp
             czilc = czilc * tem1 * tem1
             ztmax_ice(i) = z0max * exp( - czilc * ca
      &            * 258.2_kp * sqrt(ustar_ice(i)*z0max) )
@@ -390,7 +431,7 @@
             else if (sfc_z0_type == 7) then
               call znot_t_v7(wind10m, ztmax_wat(i))   ! 10-m wind,m/s, ztmax(m)
             else if (sfc_z0_type > 0) then
-              write(0,*)'no option for sfc_z0_type=',sfc_z0_type
+              print *,'no option for sfc_z0_type=',sfc_z0_type
               errflg = 1
               errmsg = 'ERROR(sfc_diff_run): no option for sfc_z0_type'
               return
@@ -453,8 +494,64 @@
 !
           endif              ! end of if(open ocean)
 !
+          if (debug_sfc_diff) then
+            if (dry(i)) then
+              if ((.not.(rb_lnd(i) == rb_lnd(i))) .or.
+     &            (.not.(fm_lnd(i) == fm_lnd(i))) .or.
+     &            (.not.(fh_lnd(i) == fh_lnd(i))) .or.
+     &            (.not.(stress_lnd(i) == stress_lnd(i))) .or.
+     &            (.not.(ustar_lnd(i) == ustar_lnd(i))) .or.
+     &            abs(rb_lnd(i)) > 1.0e4_kp .or.
+     &            abs(fm_lnd(i)) > 1.0e4_kp .or.
+     &            abs(fh_lnd(i)) > 1.0e4_kp .or.
+     &            abs(stress_lnd(i)) > 1.0e4_kp .or.
+     &            abs(ustar_lnd(i)) > 1.0e4_kp) then
+                nbad_output = nbad_output + 1
+                if (nbad_output <= debug_max_print) then
+                  print *, 'BAD sfc_diff land output i=',i,
+     &              ' rb/fm/fh=',rb_lnd(i),fm_lnd(i),fh_lnd(i),
+     &              ' stress/ust=',stress_lnd(i),ustar_lnd(i),
+     &              ' z0/zt/zv=',z0rl_lnd(i),ztmax_lnd(i),zvfun(i)
+                endif
+              endif
+            endif
+
+            if (wet(i)) then
+              if ((.not.(rb_wat(i) == rb_wat(i))) .or.
+     &            (.not.(fm_wat(i) == fm_wat(i))) .or.
+     &            (.not.(fh_wat(i) == fh_wat(i))) .or.
+     &            (.not.(stress_wat(i) == stress_wat(i))) .or.
+     &            (.not.(ustar_wat(i) == ustar_wat(i))) .or.
+     &            abs(rb_wat(i)) > 1.0e4_kp .or.
+     &            abs(fm_wat(i)) > 1.0e4_kp .or.
+     &            abs(fh_wat(i)) > 1.0e4_kp .or.
+     &            abs(stress_wat(i)) > 1.0e4_kp .or.
+     &            abs(ustar_wat(i)) > 1.0e4_kp) then
+                nbad_output = nbad_output + 1
+                if (nbad_output <= debug_max_print) then
+                  print *, 'BAD sfc_diff water output i=',i,
+     &              ' rb/fm/fh=',rb_wat(i),fm_wat(i),fh_wat(i),
+     &              ' stress/ust=',stress_wat(i),ustar_wat(i),
+     &              ' z0/zt/zv=',z0rl_wat(i),ztmax_wat(i),zvfun(i)
+                endif
+              endif
+            endif
+          endif
+
         endif                ! end of if(flagiter) loop
       enddo
+
+      if (debug_sfc_diff) then
+        print *, 'sfc_diff output min/max land: rb=',minval(rb_lnd),
+     &    maxval(rb_lnd),' fm=',minval(fm_lnd),maxval(fm_lnd),
+     &    ' fh=',minval(fh_lnd),maxval(fh_lnd)
+        print *, 'sfc_diff output min/max land: stress=',
+     &    minval(stress_lnd),maxval(stress_lnd),' ust=',
+     &    minval(ustar_lnd),maxval(ustar_lnd),' z0=',
+     &    minval(z0rl_lnd),maxval(z0rl_lnd)
+        print *, 'sfc_diff debug bad counts input/output=',
+     &    nbad_input, nbad_output
+      endif
 
       end subroutine sfc_diff_run
 
