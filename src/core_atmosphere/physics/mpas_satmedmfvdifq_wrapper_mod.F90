@@ -2,9 +2,6 @@ module mpas_satmedmfvdifq_wrapper_mod
 
   use mpas_kind_types, only: RKIND
   use satmedmfvdifq, only: satmedmfvdifq_run
-  use mpas_sfc_diff_wrapper_mod, only: gfs_sfcl_available,              &
-       gfs_sfcl_garea, gfs_sfcl_zvfun, gfs_sfcl_zorl,                  &
-       gfs_sfcl_rb_lnd, gfs_sfcl_fm_lnd, gfs_sfcl_fh_lnd
   implicit none
 
   type mpas_satmedmfvdifq_config_type
@@ -224,23 +221,12 @@ contains
     enddo
 
     do i = 1, im
-      if (gfs_sfcl_available .and. allocated(gfs_sfcl_garea) .and. &
-          size(gfs_sfcl_garea) >= im) then
-        garea(i) = gfs_sfcl_garea(i)
-      else
-        garea(i) = areaCell(i)
-      endif
+      garea(i) = areaCell(i)
 
       xmu(i) = max(coszen(i), 0.0_RKIND)
 
       ! UFS code uses z0 = 0.01*zorl, so zorl is in cm.
-      print*,'debug here',gfs_sfcl_available,gfs_sfcl_zorl(i),gfs_sfcl_fm_lnd(i),gfs_sfcl_fh_lnd(i),fm_in(i),fh_in(i)
-      if (gfs_sfcl_available .and. allocated(gfs_sfcl_zorl) .and. &
-          size(gfs_sfcl_zorl) >= im) then
-        zorl(i) = max(gfs_sfcl_zorl(i), 1.0e-6_RKIND) * 100.0_RKIND
-      else
-        zorl(i) = max(z0_mpas(i), 1.0e-6_RKIND) * 100.0_RKIND
-      endif
+      zorl(i) = min(max(z0_mpas(i), 1.0e-4_RKIND), 0.15_RKIND) * 100.0_RKIND
 
       rho1 = prsl(i,1) / (rd * max(t1(i,1), 180.0_RKIND))
 
@@ -255,16 +241,9 @@ contains
 
       u10m(i) = u10(i)
       v10m(i) = v10(i)
-      if (gfs_sfcl_available .and. allocated(gfs_sfcl_rb_lnd) .and. &
-          size(gfs_sfcl_rb_lnd) >= im) then
-        rbsoil(i) = gfs_sfcl_rb_lnd(i)
-        fm(i) = max(gfs_sfcl_fm_lnd(i), 1.0e-6_RKIND)
-        fh(i) = max(gfs_sfcl_fh_lnd(i), 1.0e-6_RKIND)
-      else
-        rbsoil(i) = rb_in(i)
-        fm(i) = max(fm_in(i), 1.0e-6_RKIND)
-        fh(i) = max(fh_in(i), 1.0e-6_RKIND)
-      endif
+      rbsoil(i) = min(max(rb_in(i), -10.0_RKIND), 10.0_RKIND)
+      fm(i)     = min(max(fm_in(i), 1.0e-6_RKIND), 10.0_RKIND)
+      fh(i)     = min(max(fh_in(i), 1.0e-6_RKIND), 10.0_RKIND)
 
       ! If MPAS does not have rbsoil, start neutral.
 !     rbsoil(i) = 0.0_RKIND
@@ -281,24 +260,10 @@ contains
 
 ! z0 from MPAS is in meters; UFS uses zorl in cm
 ! Here we stay consistent with MPAS units (meters)
-      if (gfs_sfcl_available .and. allocated(gfs_sfcl_zvfun) .and. &
-          size(gfs_sfcl_zvfun) >= im) then
-        zvfun(i) = gfs_sfcl_zvfun(i)
-      else
-        tem1 = (z0_mpas(i) - z0lo) / (z0up - z0lo)
-! limit between 0 and 1
-        tem1 = min(max(tem1, 0.0_RKIND), 1.0_RKIND)
-! ensure minimum vegetation fraction
-        tem2 = max(sigmaf(i), 0.1_RKIND)
-! final function
-        zvfun(i) = sqrt(tem1 * tem2)
-      endif
-             tem1 = (z0_mpas(i) - z0lo) / (z0up - z0lo)
-! limit between 0 and 1
-        tem1 = min(max(tem1, 0.0_RKIND), 1.0_RKIND)
-! ensure minimum vegetation fraction
-        tem2 = max(sigmaf(i), 0.1_RKIND)
-      print*,'debug here 2',gfs_sfcl_zvfun(i),sqrt(tem1 * tem2)
+      tem1 = (z0_mpas(i) - z0lo) / (z0up - z0lo)
+      tem1 = min(max(tem1, 0.0_RKIND), 1.0_RKIND)
+      tem2 = max(sigmaf(i), 0.1_RKIND)
+      zvfun(i) = sqrt(tem1 * tem2)
 
       ! No inversion limiter initially.
       kinver(i) = km
@@ -311,6 +276,26 @@ contains
     index_of_x_wind = 2
     index_of_y_wind = 3
     index_of_process_pbl = 1
+
+
+    print*, 'TKE-EDMF input min/max: rb=', minval(rbsoil), maxval(rbsoil), &
+         ' fm=', minval(fm), maxval(fm), ' fh=', minval(fh), maxval(fh)
+    print*, 'TKE-EDMF input min/max: zorl=', minval(zorl), maxval(zorl), &
+         ' stress=', minval(stress), maxval(stress), ' spd1=', minval(spd1), maxval(spd1)
+    print*, 'TKE-EDMF input min/max: heat=', minval(heat), maxval(heat), &
+         ' evap=', minval(evap), maxval(evap), ' sigmaf=', minval(sigmaf), maxval(sigmaf)
+    print*, 'TKE-EDMF input min/max: p=', minval(prsl), maxval(prsl), &
+         ' t=', minval(t1), maxval(t1), ' qv=', minval(q1(:,:,ntqv)), maxval(q1(:,:,ntqv))
+    call flush(0)
+
+    if (any(rbsoil /= rbsoil) .or. any(fm /= fm) .or. any(fh /= fh) .or. &
+        any(zorl /= zorl) .or. any(heat /= heat) .or. any(evap /= evap)) then
+       print*, 'BAD TKE-EDMF input: NaN detected before satmedmfvdifq_run'
+       call flush(0)
+       errflg = 1
+       errmsg = 'NaN in TKE-EDMF wrapper input'
+       return
+    endif
 
     call satmedmfvdifq_run(im, km, ntrac, ntcw, ntrw, ntiw, ntke,       &
          grav, pi, rd, cp, rv, hvap, hfus, fv, eps, epsm1,             &
@@ -329,7 +314,20 @@ contains
          index_of_x_wind, index_of_y_wind, index_of_process_pbl,       &
          cfg%gen_tend, cfg%ldiag3d, errmsg, errflg)
 
-    if (errflg /= 0) return
+    if (errflg /= 0) then
+       print*, 'TKE-EDMF returned errflg=', errflg, ' errmsg=', trim(errmsg)
+       call flush(0)
+       return
+    endif
+
+    print*, 'TKE-EDMF raw output min/max: tdt=', minval(tdt), maxval(tdt), &
+         ' du=', minval(du), maxval(du), ' dv=', minval(dv), maxval(dv)
+    print*, 'TKE-EDMF raw output min/max: rtg_qv=', minval(rtg(:,:,ntqv)), maxval(rtg(:,:,ntqv)), &
+         ' rtg_qc=', minval(rtg(:,:,ntcw)), maxval(rtg(:,:,ntcw)), &
+         ' rtg_qi=', minval(rtg(:,:,ntiw)), maxval(rtg(:,:,ntiw))
+    print*, 'TKE-EDMF raw output min/max: hpbl=', minval(hpbl), maxval(hpbl), &
+         ' kpbl=', minval(kpbl), maxval(kpbl), ' tke=', minval(q1(:,:,ntke)), maxval(q1(:,:,ntke))
+    call flush(0)
 
     do k = 1, km
       do i = 1, im

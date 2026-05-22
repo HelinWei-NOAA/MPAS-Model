@@ -135,7 +135,7 @@
       integer   i
       integer   nbad_input, nbad_output
       integer, parameter :: debug_max_print = 20
-      logical, parameter :: debug_sfc_diff = .true.
+      logical, parameter :: debug_sfc_diff = .false.
       real(kind=kind_phys)  :: windrel
 !
       real(kind=kind_phys) :: rat, tv1, thv1, restar, wind10m,
@@ -250,7 +250,7 @@
 
             z0max = max(zmin, min(z0rl_lnd(i), z1(i)))
 !** xubin's new z0  over land
-            tem1  = one - shdmax(i)*0.01_kp
+            tem1  = one - shdmax(i)
             tem2  = tem1 * tem1
             tem1  = one  - tem2
 
@@ -303,7 +303,7 @@
 !
             czilc = 10.0_kp ** (- 4.0_kp * z0max) ! Trier et al. (2011,WAF)
             czilc = max(min(czilc, 0.8_kp), 0.08_kp)
-            tem1 = 1.0_kp - sigmaf(i)*0.01_kp
+            tem1 = 1.0_kp - sigmaf(i)
             czilc = czilc * tem1 * tem1
             ztmax_lnd(i) = z0max * exp( - czilc * ca
      &            * 258.2_kp * sqrt(ustar_lnd(i)*z0max) )
@@ -318,9 +318,9 @@
 !
             tem1 = (z0max - z0lo) / (z0up - z0lo)
             tem1 = min(max(tem1, zero), 1.0_kp)
-            tem2 = max(sigmaf(i)*0.01_kp, 0.1_kp)
+            tem2 = max(sigmaf(i), 0.1_kp)
             zvfun(i) = sqrt(tem1 * tem2)
-            windl = max (wind(i),0.1_kp)
+            windl = max(wind(i), 1.0_kp)
 !
             call stability
 !  ---  inputs:
@@ -342,9 +342,9 @@
      &                     * virtfac
             endif
 
-            z0max = max(zmin, min(0.01_kp * z0rl_ice(i), z1(i)))
+            z0max = max(zmin, min(z0rl_ice(i), z1(i)))
 !** xubin's new z0  over land and sea ice
-            tem1  = one - shdmax(i)*0.01_kp
+            tem1  = one - shdmax(i)
             tem2  = tem1 * tem1
             tem1  = one  - tem2
 
@@ -369,7 +369,7 @@
 !
             czilc = 10.0_kp ** (- 4.0_kp * z0max)
             czilc = max(min(czilc, 0.8_kp), 0.08_kp)
-            tem1 = 1.0_kp - sigmaf(i)*0.01_kp
+            tem1 = 1.0_kp - sigmaf(i)
             czilc = czilc * tem1 * tem1
             ztmax_ice(i) = z0max * exp( - czilc * ca
      &            * 258.2_kp * sqrt(ustar_ice(i)*z0max) )
@@ -378,7 +378,7 @@
 !
             call stability
 !  ---  inputs:
-     &     (z1(i), zvfun(i), gdx, tv1, thv1, wind(i),
+     &     (z1(i), zvfun(i), gdx, tv1, thv1, max(wind(i), 1.0_kp),
      &      z0max, ztmax_ice(i), tvs, grav, thsfc_loc,
 !  ---  outputs:
      &      rb_ice(i), fm_ice(i), fh_ice(i), fm10_ice(i), fh2_ice(i),
@@ -407,7 +407,7 @@
               windrel=wind(i)
             endif
 
-            z0    = 0.01_kp * z0rl_wat(i)
+            z0    = z0rl_wat(i)
             z0max = max(zmin, min(z0,z1(i)))
 !
 !**  test xubin's new z0

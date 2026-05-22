@@ -162,9 +162,9 @@ contains
        icy(i) = (fice(i) > 0.5_RKIND)
 
        ! GFS sfc_diff expects z0rl in cm and internally uses 0.01*z0rl.
-       z0rl_lnd(i) = max(znt(i), 1.0e-6_RKIND) * 100.0_RKIND
-       z0rl_wat(i) = max(znt(i), 1.0e-6_RKIND) * 100.0_RKIND
-       z0rl_ice(i) = max(znt(i), 1.0e-6_RKIND) * 100.0_RKIND
+       z0rl_lnd(i) = min(max(znt(i), 1.0e-4_RKIND), 0.15_RKIND)
+       z0rl_wat(i) = min(max(znt(i), 1.0e-4_RKIND), 0.15_RKIND)
+       z0rl_ice(i) = min(max(znt(i), 1.0e-4_RKIND), 0.15_RKIND)
        z0rl_wav(i) = max(znt(i), 1.0e-6_RKIND) * 100.0_RKIND
 
        ustar_lnd(i) = max(stress(i), 0.0_RKIND)
@@ -227,14 +227,14 @@ contains
 
     do i = 1, num_cells
        if (dry(i)) then
-          znt(i) = max(0.01_RKIND*z0rl_lnd(i), 1.0e-6_RKIND)
-          z0h(i) = max(ztmax_lnd(i), 1.0e-6_RKIND)
-          stress(i) = max(stress_lnd(i), 0.0_RKIND)
-          cm(i) = max(cm_lnd(i), 1.0e-8_RKIND)
-          ch(i) = max(ch_lnd(i), 1.0e-8_RKIND)
-          rb_lnd_out(i) = rb_lnd(i)
-          fm(i) = max(fm_lnd(i), 1.0e-6_RKIND)
-          fh(i) = max(fh_lnd(i), 1.0e-6_RKIND)
+          znt(i) = min(max(znt(i), 1.0e-4_RKIND), 0.15_RKIND)
+          z0h(i) = znt(i)
+          stress(i) = min(max(stress_lnd(i), 1.0e-6_RKIND), 5.0_RKIND)
+          cm(i) = min(max(cm_lnd(i), 1.0e-8_RKIND), 0.1_RKIND)
+          ch(i) = min(max(ch_lnd(i), 1.0e-8_RKIND), 0.1_RKIND)
+          rb_lnd_out(i) = min(max(rb_lnd(i), -10.0_RKIND), 10.0_RKIND)
+          fm(i) = min(max(fm_lnd(i), 1.0e-6_RKIND), 10.0_RKIND)
+          fh(i) = min(max(fh_lnd(i), 1.0e-6_RKIND), 10.0_RKIND)
        elseif (icy(i)) then
           znt(i) = max(0.01_RKIND*z0rl_ice(i), 1.0e-6_RKIND)
           z0h(i) = max(ztmax_ice(i), 1.0e-6_RKIND)
@@ -261,7 +261,6 @@ contains
        gfs_sfcl_rb_lnd(i) = rb_lnd(i)
        gfs_sfcl_fm_lnd(i) = fm_lnd(i)
        gfs_sfcl_fh_lnd(i) = fh_lnd(i)
-       print*,'inside sfcl wrapper',gfs_sfcl_garea(i),gfs_sfcl_zvfun(i),gfs_sfcl_zorl(i),gfs_sfcl_rb_lnd(i),gfs_sfcl_fm_lnd(i),gfs_sfcl_fh_lnd(i)
     enddo
 
     gfs_sfcl_available = .true.

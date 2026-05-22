@@ -1471,6 +1471,13 @@
 !call mpas_log_write('--- enter subroutine driver_pbl:')
 
 !initialization of CCPP-compliant flags:
+ real(kind=RKIND), dimension(its:ite) :: rb_tkeedmf_pbl
+ real(kind=RKIND), dimension(its:ite) :: fm_tkeedmf_pbl
+ real(kind=RKIND), dimension(its:ite) :: fh_tkeedmf_pbl
+ real(kind=RKIND), dimension(its:ite) :: znt_tkeedmf_pbl
+ real(kind=RKIND), dimension(its:ite) :: vegfra_tkeedmf_pbl
+ real(kind=RKIND), dimension(its:ite) :: stress_tkeedmf_safe_p
+
  errmsg = ' '
  errflg = 0
 
@@ -1557,8 +1564,30 @@
        do j = jts,jte
        do i = its,ite
           coszen_tkeedmf_p(i,j) = 1.0_RKIND
+
+          ! Guard surface fluxes before passing them into TKE-EDMF.
+          ! qfx_p is moisture flux [kg m-2 s-1]; lh_tkeedmf_p is latent heat flux [W m-2].
+          ! Bad qfx/hfx values can create Inf/NaN evap/heat in the TKE-EDMF wrapper.
+          if (qfx_p(i,j) /= qfx_p(i,j) .or. abs(qfx_p(i,j)) > 1.0e-3_RKIND) then
+             qfx_p(i,j) = 0.0_RKIND
+          endif
+
+          if (hfx_p(i,j) /= hfx_p(i,j) .or. abs(hfx_p(i,j)) > 2000.0_RKIND) then
+             hfx_p(i,j) = 0.0_RKIND
+          endif
+
           lh_tkeedmf_p(i,j) = qfx_p(i,j) * xlv
+
+          if (lh_tkeedmf_p(i,j) /= lh_tkeedmf_p(i,j) .or. abs(lh_tkeedmf_p(i,j)) > 3000.0_RKIND) then
+             lh_tkeedmf_p(i,j) = 0.0_RKIND
+          endif
+
           stress_tkeedmf_p(i,j) = ust_p(i,j) * ust_p(i,j)
+
+          if (stress_tkeedmf_p(i,j) /= stress_tkeedmf_p(i,j) .or. &
+              abs(stress_tkeedmf_p(i,j)) > 5.0_RKIND) then
+             stress_tkeedmf_p(i,j) = 1.0e-6_RKIND
+          endif
 
           ! Build geometric heights from MPAS layer thickness.
           ! zint is interface height and zmid is layer-center height.
@@ -1574,7 +1603,39 @@
        enddo
        enddo
 
-       call mpas_call_satmedmfvdifq(                                  &
+       
+       ! Prepare and diagnose surface-layer inputs passed to TKE-EDMF.
+       ! These should come from the selected surface-layer scheme through normal MPAS arrays.
+       rb_tkeedmf_pbl(:) = min(max(br_p(its:ite,jts), -1.0_RKIND), 1.0_RKIND)
+       fm_tkeedmf_pbl(:) = min(max(psim_p(its:ite,jts), 1.0e-6_RKIND), 5.0_RKIND)
+       fh_tkeedmf_pbl(:) = min(max(psih_p(its:ite,jts), 1.0e-6_RKIND), 5.0_RKIND)
+       znt_tkeedmf_pbl(:) = min(max(znt_p(its:ite,jts), 1.0e-4_RKIND), 0.15_RKIND)
+       vegfra_tkeedmf_pbl(:) = vegfra_p(its:ite,jts)
+       if (maxval(vegfra_tkeedmf_pbl) > 1.5_RKIND) vegfra_tkeedmf_pbl(:) = 0.01_RKIND * vegfra_tkeedmf_pbl(:)
+       vegfra_tkeedmf_pbl(:) = min(max(vegfra_tkeedmf_pbl(:), 0.0_RKIND), 1.0_RKIND)
+       stress_tkeedmf_safe_p(:) = min(max(stress_tkeedmf_p(its:ite,jts), 1.0e-6_RKIND), 5.0_RKIND)
+
+       print*, 'PBL raw sfcl inputs before limiting: br=', minval(br_p(its:ite,jts)), maxval(br_p(its:ite,jts)), &
+                  ' psim=', minval(psim_p(its:ite,jts)), maxval(psim_p(its:ite,jts)), &
+                  ' psih=', minval(psih_p(its:ite,jts)), maxval(psih_p(its:ite,jts)), &
+                  ' znt=', minval(znt_p(its:ite,jts)), maxval(znt_p(its:ite,jts))
+       print*, 'PBL before TKE-EDMF: znt=', minval(znt_tkeedmf_pbl), maxval(znt_tkeedmf_pbl), &
+                  ' rb=', minval(rb_tkeedmf_pbl), maxval(rb_tkeedmf_pbl), &
+                  ' fm=', minval(fm_tkeedmf_pbl), maxval(fm_tkeedmf_pbl), &
+                  ' fh=', minval(fh_tkeedmf_pbl), maxval(fh_tkeedmf_pbl)
+       print*, 'PBL before TKE-EDMF guarded fluxes: hfx=', minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
+                  ' qfx=', minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts)), &
+                  ' lh=', minval(lh_tkeedmf_p(its:ite,jts)), maxval(lh_tkeedmf_p(its:ite,jts)), &
+                  ' stress=', minval(stress_tkeedmf_safe_p), maxval(stress_tkeedmf_safe_p)
+       call flush(0)
+
+       if (maxval(abs(hfx_p(its:ite,jts))) == 0.0_RKIND .and. &
+           maxval(abs(qfx_p(its:ite,jts))) == 0.0_RKIND) then
+          print*, 'WARNING: TKE-EDMF called with zero hfx and zero qfx for this strip.'
+          call flush(0)
+       endif
+
+call mpas_call_satmedmfvdifq(                                  &
             (ite-its+1), (kte-kts+1), 4, dt_pbl,                      &
             zmid_tkeedmf_p(its:ite,kts:kte,jts),                                &
             zint_tkeedmf_p(its:ite,kts:kte+1,jts),                              &
@@ -1595,14 +1656,14 @@
             tsk_p(its:ite,jts),                                       &
             hfx_p(its:ite,jts),                                       &
             lh_tkeedmf_p(its:ite,jts),                                &
-            stress_tkeedmf_p(its:ite,jts),                            &
-            znt_p(its:ite,jts),                                       &
+            stress_tkeedmf_safe_p,                            &
+            znt_tkeedmf_pbl,                                       &
             u10_p(its:ite,jts),                                       &
             v10_p(its:ite,jts),                                       &
-            vegfra_p(its:ite,jts),                                    &
-            br_p(its:ite,jts),                                        &
-            psim_p(its:ite,jts),                                      &
-            psih_p(its:ite,jts),                                      &
+            vegfra_tkeedmf_pbl,                                    &
+            rb_tkeedmf_pbl,                                        &
+            fm_tkeedmf_pbl,                                      &
+            fh_tkeedmf_pbl,                                      &
             hpbl_p(its:ite,jts),                                      &
             kpbl_p(its:ite,jts),                                      &
             rthblten_p(its:ite,kts:kte,jts),                          &
@@ -1612,6 +1673,17 @@
             rqcblten_p(its:ite,kts:kte,jts),                          &
             rqiblten_p(its:ite,kts:kte,jts),                          &
             tke_edmf_cfg, tke_edmf_errmsg, tke_edmf_errflg)
+
+
+       print*, 'PBL after TKE-EDMF: rth=', minval(rthblten_p(its:ite,kts:kte,jts)), &
+                  maxval(rthblten_p(its:ite,kts:kte,jts)), &
+                  ' ru=', minval(rublten_p(its:ite,kts:kte,jts)), maxval(rublten_p(its:ite,kts:kte,jts)), &
+                  ' rv=', minval(rvblten_p(its:ite,kts:kte,jts)), maxval(rvblten_p(its:ite,kts:kte,jts))
+       print*, 'PBL after TKE-EDMF: qv=', minval(rqvblten_p(its:ite,kts:kte,jts)), &
+                  maxval(rqvblten_p(its:ite,kts:kte,jts)), &
+                  ' qc=', minval(rqcblten_p(its:ite,kts:kte,jts)), maxval(rqcblten_p(its:ite,kts:kte,jts)), &
+                  ' qi=', minval(rqiblten_p(its:ite,kts:kte,jts)), maxval(rqiblten_p(its:ite,kts:kte,jts))
+       call flush(0)
 
        if (tke_edmf_errflg /= 0) then
           write(*,*) 'FATAL in bl_tke_edmf: ', trim(tke_edmf_errmsg)

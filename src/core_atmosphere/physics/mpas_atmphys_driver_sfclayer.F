@@ -1218,6 +1218,11 @@
 !call mpas_log_write('--- enter subroutine driver_sfclayer:')
 
 !initialization of CCPP-compliant flags:
+ real(kind=RKIND), dimension(its:ite) :: vegfra_gfs_sfcl
+ real(kind=RKIND), dimension(its:ite) :: shdmax_gfs_sfcl
+ real(kind=RKIND), dimension(its:ite) :: znt_gfs_sfcl
+ real(kind=RKIND), dimension(its:ite) :: wspd_gfs_sfcl
+
  errmsg = ' '
  errflg = 0
 
@@ -1558,7 +1563,26 @@
 
        call mpas_timer_start('gfs_sfcl')
 
-       call mpas_call_sfc_diff( &
+       
+       ! Prepare safe GFS surface-layer inputs for this horizontal strip.
+       ! GFS expects vegetation fraction and shdmax in [0,1], positive wind,
+       ! and roughness length in meters here. The wrapper converts znt to cm
+       ! if required by sfc_diff.
+
+       vegfra_gfs_sfcl(:) = vegfra_p(its:ite,jts)
+       shdmax_gfs_sfcl(:) = shdmax_p(its:ite,jts)
+
+       ! Some MPAS inputs are percent [0,100], while GFS expects fraction [0,1].
+       if (maxval(vegfra_gfs_sfcl) > 1.5_RKIND) vegfra_gfs_sfcl(:) = 0.01_RKIND * vegfra_gfs_sfcl(:)
+       if (maxval(shdmax_gfs_sfcl) > 1.5_RKIND) shdmax_gfs_sfcl(:) = 0.01_RKIND * shdmax_gfs_sfcl(:)
+
+       vegfra_gfs_sfcl(:) = min(max(vegfra_gfs_sfcl(:), 0.0_RKIND), 1.0_RKIND)
+       shdmax_gfs_sfcl(:) = min(max(shdmax_gfs_sfcl(:), 0.0_RKIND), 1.0_RKIND)
+
+       znt_gfs_sfcl(:)  = min(max(znt_p(its:ite,jts), 1.0e-4_RKIND), 0.15_RKIND)
+       wspd_gfs_sfcl(:) = max(wspd_p(its:ite,jts), 1.0_RKIND)
+
+call mpas_call_sfc_diff( &
             num_cells = (ite-its+1),                                  &
             num_lev   = (kte-kts+1),                                  &
             dt        = 0.0_RKIND,                                    &
@@ -1567,18 +1591,18 @@
             t1        = t_p(its:ite,kts,jts),                         &
             q1        = qv_p(its:ite,kts,jts),                        &
             z1        = dz_p(its:ite,kts,jts),                        &
-            wspd      = wspd_p(its:ite,jts),                          &
+            wspd      = wspd_gfs_sfcl,                          &
             prsl1     = pres_hyd_p(its:ite,kts,jts),                  &
             prslki    = pi_p(its:ite,kts,jts),                        &
             prsik1    = pi_p(its:ite,kts,jts),                        &
             prslk1    = pi_p(its:ite,kts,jts),                        &
-            sigmaf    = vegfra_p(its:ite,jts),                        &
+            sigmaf    = vegfra_gfs_sfcl,                        &
             vegtype   = ivgtyp_gfs_sfcl(its:ite),                     &
-            shdmax    = shdmax_p(its:ite,jts),                        &
+            shdmax    = shdmax_gfs_sfcl,                        &
             ivegsrc   = 1,                                            &
             xland     = xland_p(its:ite,jts),                         &
             xice      = xice_p(its:ite,jts),                          &
-            znt       = znt_p(its:ite,jts),                           &
+            znt       = znt_gfs_sfcl,                           &
             z0h       = gz1oz0_p(its:ite,jts),                        &
             tsk       = tsk_p(its:ite,jts),                           &
             u10       = u10_p(its:ite,jts),                           &
