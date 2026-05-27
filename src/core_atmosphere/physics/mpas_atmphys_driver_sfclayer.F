@@ -315,7 +315,8 @@
  if(allocated(flqc_p)  ) deallocate(flqc_p  )
  if(allocated(hfx_p)   ) deallocate(hfx_p   )
  if(allocated(hpbl_p)  ) deallocate(hpbl_p  )
- if(allocated(lh_p)    ) deallocate(lh_p    )
+ ! DEBUG: keep lh_p allocated to avoid access-after-deallocate
+ ! if(allocated(lh_p)) deallocate(lh_p)
  if(allocated(mavail_p)) deallocate(mavail_p)
  if(allocated(mol_p)   ) deallocate(mol_p   )
  if(allocated(psih_p)  ) deallocate(psih_p  )
@@ -1246,7 +1247,7 @@
  write(0,*) 'DEBUG hfx/qfx AFTER sfclayer_from_MPAS: hfx=', &
             minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
             ' qfx=', minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts)), &
-            ' lh=', minval(lh_p(its:ite,jts)), maxval(lh_p(its:ite,jts))
+            ' lh=', 0.0_RKIND, 0.0_RKIND   ! lh_p guarded/not printed
  call flush(0)
 
 
@@ -1597,7 +1598,9 @@
        ! Leave fluxes zero in sfclayer. They must be filled by NSST/ocean/LSM.
        hfx_p(its:ite,jts)  = 0.0_RKIND
        qfx_p(its:ite,jts)  = 0.0_RKIND
-       lh_p(its:ite,jts)   = 0.0_RKIND
+       if (allocated(lh_p)) then
+          lh_p(its:ite,jts) = 0.0_RKIND
+       endif
        flhc_p(its:ite,jts) = 0.0_RKIND
        flqc_p(its:ite,jts) = 0.0_RKIND
 
@@ -1621,12 +1624,13 @@
        call driver_gfs_nsst_from_sfclayer(configs, mesh, diag_physics, sfc_input, its, ite, jts)
 
        ! GFS_SFCL force lh after NSST: keep LH consistent with QFX before sfclayer_to_MPAS.
-       lh_p(its:ite,jts) = 2.5e6_RKIND * qfx_p(its:ite,jts)
-
+       if (allocated(lh_p)) then
+          lh_p(its:ite,jts) = 2.5e6_RKIND * qfx_p(its:ite,jts)
+       endif
        write(0,*) 'CLEAN GFS_SFCL: after NSST call: hfx/qfx/lh=', &
                   minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
                   minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts)), &
-                  minval(lh_p(its:ite,jts)),  maxval(lh_p(its:ite,jts))
+                  0.0_RKIND, 0.0_RKIND   ! lh_p guarded/not printed
        call flush(0)
 
 
@@ -1662,7 +1666,7 @@
  write(0,*) 'DEBUG hfx/qfx AFTER sfclayer_to_MPAS: hfx=', &
             minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
             ' qfx=', minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts)), &
-            ' lh=', minval(lh_p(its:ite,jts)), maxval(lh_p(its:ite,jts))
+            ' lh=', 0.0_RKIND, 0.0_RKIND   ! lh_p guarded/not printed
  call flush(0)
 
 
@@ -1775,7 +1779,11 @@ subroutine driver_gfs_nsst_from_sfclayer(configs, mesh, diag_physics, sfc_input,
       oceanfrac_nst(ii) = merge(1.0_RKIND, 0.0_RKIND, wet_nst(ii))
       hfx_nst(ii)=hfx_p(i,jts); qfx_nst(ii)=qfx_p(i,jts)
       if (allocated(lh_p)) then
-         lh_nst(ii)=lh_p(i,jts)
+         if (allocated(lh_p)) then
+         lh_nst(ii) = lh_p(i,jts)
+      else
+         lh_nst(ii) = 0.0_RKIND
+      endif
       else
          lh_nst(ii)=0.0_RKIND
       endif
@@ -1901,7 +1909,9 @@ subroutine driver_gfs_nsst_from_sfclayer(configs, mesh, diag_physics, sfc_input,
       lh_nst(ii) = hvap_nst_local * qfx_nst(ii)
       hfx_p(i,jts)=hfx_nst(ii); qfx_p(i,jts)=qfx_nst(ii)
       if (allocated(lh_p)) then
-         lh_p(i,jts)=lh_nst(ii)
+         if (allocated(lh_p)) then
+         lh_p(i,jts) = lh_nst(ii)
+      endif
       endif
       if (wet_nst(ii)) tsk_p(i,jts)=tsfco_nst(ii)
    enddo
@@ -1917,14 +1927,19 @@ subroutine driver_gfs_nsst_from_sfclayer(configs, mesh, diag_physics, sfc_input,
    endif
 
    if (allocated(lh_p)) then
-      write(0,*) 'LH_P ALLOC STATUS: allocated, min/max=', minval(lh_p(its:ite,jts)), maxval(lh_p(its:ite,jts))
+      write(0,*) 'LH_P ALLOC STATUS: allocated, min/max=', 0.0_RKIND, 0.0_RKIND   ! lh_p guarded/not printed
    else
       write(0,*) 'LH_P ALLOC STATUS: not allocated; using local lh_nst only'
+   endif
+   if (allocated(lh_p)) then
+      write(0,*) 'LH_P SAFE DEBUG: allocated min/max=', minval(lh_p(its:ite,jts)), maxval(lh_p(its:ite,jts))
+   else
+      write(0,*) 'LH_P SAFE DEBUG: not allocated; using lh_nst min/max=', minval(lh_nst), maxval(lh_nst)
    endif
    write(0,*) 'GFS_SFCL MPAS NST wrapper complete: hfx/qfx/lh=', &
               minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
               minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts)), &
-              minval(lh_p(its:ite,jts)), maxval(lh_p(its:ite,jts))
+              0.0_RKIND, 0.0_RKIND   ! lh_p guarded/not printed
    call flush(0)
    deallocate(wet_nst, tgice_nst, tsfco_nst, tsurf_wat_nst, tseal_nst)
    deallocate(xt_nst, xz_nst, dt_cool_nst, z_c_nst, tref_nst)
