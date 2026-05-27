@@ -1620,6 +1620,9 @@
 
        call driver_gfs_nsst_from_sfclayer(configs, mesh, diag_physics, sfc_input, its, ite, jts)
 
+       ! GFS_SFCL force lh after NSST: keep LH consistent with QFX before sfclayer_to_MPAS.
+       lh_p(its:ite,jts) = 2.5e6_RKIND * qfx_p(its:ite,jts)
+
        write(0,*) 'CLEAN GFS_SFCL: after NSST call: hfx/qfx/lh=', &
                   minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
                   minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts)), &
@@ -1687,10 +1690,15 @@ subroutine driver_gfs_nsst_from_sfclayer(configs, mesh, diag_physics, sfc_input,
    use mpas_kind_types
    use mpas_gfs_nst_wrapper, only : mpas_nst_pre, mpas_nst_main, mpas_nst_post
    implicit none
+
+   include 'mpif.h'
    type(mpas_pool_type), intent(in) :: configs, mesh, diag_physics, sfc_input
    integer, intent(in) :: its, ite, jts
    integer :: im_nst, i, ii, nthreads_nst, errflg_nst
+   integer :: myrank_nst, mpi_ierr_nst
+   integer :: nst_bad_count
    real(kind=RKIND) :: tgice_scalar_nst
+   real(kind=RKIND), parameter :: hvap_nst_local = 2.5e6_RKIND
    character(len=256) :: errmsg_nst
    logical :: cplflx_nst
    logical, allocatable :: wet_nst(:)
@@ -1704,13 +1712,56 @@ subroutine driver_gfs_nsst_from_sfclayer(configs, mesh, diag_physics, sfc_input,
    im_nst = ite - its + 1
    nthreads_nst = 1
    cplflx_nst = .false.
+   errflg_nst = 0
+   errmsg_nst = ''
+   myrank_nst = -1
+   mpi_ierr_nst = 0
+   call MPI_Comm_rank(MPI_COMM_WORLD, myrank_nst, mpi_ierr_nst)
    tgice_scalar_nst = 273.15_RKIND
    allocate(wet_nst(im_nst), tgice_nst(im_nst), tsfco_nst(im_nst), tsurf_wat_nst(im_nst), tseal_nst(im_nst))
    allocate(xt_nst(im_nst), xz_nst(im_nst), dt_cool_nst(im_nst), z_c_nst(im_nst), tref_nst(im_nst))
    allocate(oceanfrac_nst(im_nst), hfx_nst(im_nst), qfx_nst(im_nst), lh_nst(im_nst))
    allocate(ps_nst(im_nst), t1_nst(im_nst), q1_nst(im_nst))
    allocate(wind_nst(im_nst), cm_nst(im_nst), ch_nst(im_nst))
+
+   if (ite >= 770 .or. myrank_nst == 0) then
+      write(0,*) 'NST ALLOC SIZE DEBUG: rank=', myrank_nst, &
+                 ' strip=', its, ite, jts, ' im=', im_nst, &
+                 ' wet/tgice=', size(wet_nst), size(tgice_nst), &
+                 ' tsfco/tsurf/tseal=', size(tsfco_nst), size(tsurf_wat_nst), size(tseal_nst), &
+                 ' xt/xz/dtcool/zc/tref=', size(xt_nst), size(xz_nst), size(dt_cool_nst), &
+                 size(z_c_nst), size(tref_nst), &
+                 ' flux=', size(hfx_nst), size(qfx_nst), size(lh_nst), &
+                 ' met=', size(ps_nst), size(t1_nst), size(q1_nst), size(wind_nst)
+      call flush(0)
+   endif
    timestep_nst = 1.0_RKIND
+   if (ite >= 770 .or. myrank_nst == 0) then
+      write(0,*) 'NST DEBUG AFTER POST: rank=', myrank_nst, &
+                 ' err=', errflg_nst, trim(errmsg_nst), &
+                 ' tsfco=', minval(tsfco_nst), maxval(tsfco_nst), &
+                 ' tseal=', minval(tseal_nst), maxval(tseal_nst)
+      call flush(0)
+   endif
+
+   if (size(wet_nst) /= im_nst .or. size(tsfco_nst) /= im_nst .or. &
+       size(tsurf_wat_nst) /= im_nst .or. size(tseal_nst) /= im_nst .or. &
+       size(xt_nst) /= im_nst .or. size(xz_nst) /= im_nst .or. &
+       size(dt_cool_nst) /= im_nst .or. size(z_c_nst) /= im_nst .or. &
+       size(tref_nst) /= im_nst .or. size(oceanfrac_nst) /= im_nst .or. &
+       size(hfx_nst) /= im_nst .or. size(qfx_nst) /= im_nst .or. &
+       size(lh_nst) /= im_nst .or. size(ps_nst) /= im_nst .or. &
+       size(t1_nst) /= im_nst .or. size(q1_nst) /= im_nst .or. &
+       size(wind_nst) /= im_nst .or. size(cm_nst) /= im_nst .or. &
+       size(ch_nst) /= im_nst) then
+      write(0,*) 'NST SIZE MISMATCH FATAL: rank=', myrank_nst, &
+                 ' strip=', its, ite, jts, ' im=', im_nst
+      call flush(0)
+      stop 991
+   endif
+
+
+
 
    do i = its, ite
       ii = i - its + 1
@@ -1722,7 +1773,12 @@ subroutine driver_gfs_nsst_from_sfclayer(configs, mesh, diag_physics, sfc_input,
       xt_nst(ii)=0.0_RKIND; xz_nst(ii)=0.0_RKIND; dt_cool_nst(ii)=0.0_RKIND; z_c_nst(ii)=0.0_RKIND
       tref_nst(ii)=tsk_p(i,jts)
       oceanfrac_nst(ii) = merge(1.0_RKIND, 0.0_RKIND, wet_nst(ii))
-      hfx_nst(ii)=hfx_p(i,jts); qfx_nst(ii)=qfx_p(i,jts); lh_nst(ii)=lh_p(i,jts)
+      hfx_nst(ii)=hfx_p(i,jts); qfx_nst(ii)=qfx_p(i,jts)
+      if (allocated(lh_p)) then
+         lh_nst(ii)=lh_p(i,jts)
+      else
+         lh_nst(ii)=0.0_RKIND
+      endif
       ps_nst(ii)=psfc_p(i,jts)
       t1_nst(ii)=t_p(i,kts,jts)
       q1_nst(ii)=qv_p(i,kts,jts)
@@ -1731,20 +1787,140 @@ subroutine driver_gfs_nsst_from_sfclayer(configs, mesh, diag_physics, sfc_input,
       ch_nst(ii)=max(ck_p(i,jts),1.0e-6_RKIND)
    enddo
 
+   write(0,*) 'NST STEP before mpas_nst_pre: strip=', its, ite, jts
+   call flush(0)
+   do i = 1, im_nst
+      if (ps_nst(i) /= ps_nst(i) .or. t1_nst(i) /= t1_nst(i) .or. &
+          q1_nst(i) /= q1_nst(i) .or. wind_nst(i) /= wind_nst(i) .or. &
+          ps_nst(i) <= 0.0_RKIND .or. t1_nst(i) <= 100.0_RKIND) then
+         write(0,*) 'NST DEBUG BAD INPUT DETECTED: rank=', myrank_nst, &
+                    ' strip=', its, ite, jts, ' local_i=', i, &
+                    ' ps/t/q/wind=', ps_nst(i), t1_nst(i), q1_nst(i), wind_nst(i)
+         call flush(0)
+         ps_nst(i) = max(ps_nst(i), 10000.0_RKIND)
+         t1_nst(i) = max(t1_nst(i), 180.0_RKIND)
+         q1_nst(i) = max(q1_nst(i), 0.0_RKIND)
+         wind_nst(i) = max(wind_nst(i), 1.0_RKIND)
+      endif
+   enddo
+
+   
+   nst_bad_count = 0
+   do i = 1, im_nst
+      if (ps_nst(i) /= ps_nst(i) .or. t1_nst(i) /= t1_nst(i) .or. &
+          q1_nst(i) /= q1_nst(i) .or. wind_nst(i) /= wind_nst(i) .or. &
+          hfx_nst(i) /= hfx_nst(i) .or. qfx_nst(i) /= qfx_nst(i) .or. &
+          lh_nst(i) /= lh_nst(i) .or. tsfco_nst(i) /= tsfco_nst(i) .or. &
+          tsurf_wat_nst(i) /= tsurf_wat_nst(i) .or. tseal_nst(i) /= tseal_nst(i)) then
+         nst_bad_count = nst_bad_count + 1
+         if (nst_bad_count <= 5) then
+            write(0,*) 'NST NAN BEFORE PRE: rank=', myrank_nst, &
+                       ' strip=', its, ite, jts, ' i=', i, &
+                       ' ps/t/q/w=', ps_nst(i), t1_nst(i), q1_nst(i), wind_nst(i), &
+                       ' h/q/lh=', hfx_nst(i), qfx_nst(i), lh_nst(i), &
+                       ' ts=', tsfco_nst(i), tsurf_wat_nst(i), tseal_nst(i)
+            call flush(0)
+         endif
+      endif
+   enddo
+
+   if (ite >= 770 .or. myrank_nst == 0 .or. nst_bad_count > 0) then
+      write(0,*) 'NST FILLED ARRAY DEBUG: rank=', myrank_nst, &
+                 ' strip=', its, ite, jts, ' im=', im_nst, &
+                 ' bad=', nst_bad_count, &
+                 ' ps=', minval(ps_nst), maxval(ps_nst), &
+                 ' t1=', minval(t1_nst), maxval(t1_nst), &
+                 ' q1=', minval(q1_nst), maxval(q1_nst), &
+                 ' wind=', minval(wind_nst), maxval(wind_nst), &
+                 ' tsfco=', minval(tsfco_nst), maxval(tsfco_nst), &
+                 ' tsurf=', minval(tsurf_wat_nst), maxval(tsurf_wat_nst)
+      call flush(0)
+   endif
+
+   if (ite >= 770 .or. myrank_nst == 0) then
+      write(0,*) 'NST DEBUG BEFORE PRE: rank=', myrank_nst, &
+                 ' strip=', its, ite, jts, &
+                 ' ps=', minval(ps_nst), maxval(ps_nst), &
+                 ' t1=', minval(t1_nst), maxval(t1_nst), &
+                 ' q1=', minval(q1_nst), maxval(q1_nst), &
+                 ' wind=', minval(wind_nst), maxval(wind_nst), &
+                 ' cm/ch=', minval(cm_nst), maxval(cm_nst), minval(ch_nst), maxval(ch_nst), &
+                 ' oceanfrac=', minval(oceanfrac_nst), maxval(oceanfrac_nst)
+      call flush(0)
+   endif
+
    call mpas_nst_pre(im_nst, wet_nst, tgice_scalar_nst, tsfco_nst, tsurf_wat_nst, tseal_nst, &
                      xt_nst, xz_nst, dt_cool_nst, z_c_nst, tref_nst, cplflx_nst, &
                      oceanfrac_nst, nthreads_nst, errmsg_nst, errflg_nst)
+   write(0,*) 'NST STEP after mpas_nst_pre: err=', errflg_nst, trim(errmsg_nst)
+   call flush(0)
+   write(0,*) 'NST STEP before mpas_nst_main: hfx/qfx/lh=', minval(hfx_nst), maxval(hfx_nst), minval(qfx_nst), maxval(qfx_nst), minval(lh_nst), maxval(lh_nst)
+   call flush(0)
+   if (ite >= 770 .or. myrank_nst == 0) then
+      write(0,*) 'NST DEBUG AFTER PRE: rank=', myrank_nst, &
+                 ' err=', errflg_nst, trim(errmsg_nst), &
+                 ' xt=', minval(xt_nst), maxval(xt_nst), &
+                 ' xz=', minval(xz_nst), maxval(xz_nst), &
+                 ' dt_cool=', minval(dt_cool_nst), maxval(dt_cool_nst), &
+                 ' z_c=', minval(z_c_nst), maxval(z_c_nst)
+      call flush(0)
+   endif
+
+   if (ite >= 770 .or. myrank_nst == 0) then
+      write(0,*) 'NST DEBUG BEFORE MAIN: rank=', myrank_nst, &
+                 ' hfx=', minval(hfx_nst), maxval(hfx_nst), &
+                 ' qfx=', minval(qfx_nst), maxval(qfx_nst), &
+                 ' lh=', minval(lh_nst), maxval(lh_nst)
+      call flush(0)
+   endif
+
    call mpas_nst_main(im_nst, hfx_nst, qfx_nst, lh_nst, tsurf_wat_nst, oceanfrac_nst, &
                      ps_nst, t1_nst, q1_nst, wind_nst, cm_nst, ch_nst, timestep_nst, &
                      errmsg_nst, errflg_nst)
+   write(0,*) 'NST STEP after mpas_nst_main: err=', errflg_nst, trim(errmsg_nst), ' hfx/qfx/lh=', minval(hfx_nst), maxval(hfx_nst), minval(qfx_nst), maxval(qfx_nst), minval(lh_nst), maxval(lh_nst)
+   call flush(0)
+   if (ite >= 770 .or. myrank_nst == 0) then
+      write(0,*) 'NST DEBUG AFTER MAIN: rank=', myrank_nst, &
+                 ' err=', errflg_nst, trim(errmsg_nst), &
+                 ' hfx=', minval(hfx_nst), maxval(hfx_nst), &
+                 ' qfx=', minval(qfx_nst), maxval(qfx_nst), &
+                 ' lh=', minval(lh_nst), maxval(lh_nst), &
+                 ' tsurf=', minval(tsurf_wat_nst), maxval(tsurf_wat_nst)
+      call flush(0)
+   endif
+
    call mpas_nst_post(im_nst, wet_nst, tsfco_nst, tsurf_wat_nst, tseal_nst, tref_nst, oceanfrac_nst, errmsg_nst, errflg_nst)
+
+   write(0,*) 'NST STEP after mpas_nst_post: err=', errflg_nst, trim(errmsg_nst)
+   call flush(0)
 
    do i = its, ite
       ii = i - its + 1
-      hfx_p(i,jts)=hfx_nst(ii); qfx_p(i,jts)=qfx_nst(ii); lh_p(i,jts)=lh_nst(ii)
+      ! Force LH consistency here so even if the NST module leaves ep/lh zero,
+      ! PBL still receives LH consistent with QFX.
+      lh_nst(ii) = hvap_nst_local * qfx_nst(ii)
+      hfx_p(i,jts)=hfx_nst(ii); qfx_p(i,jts)=qfx_nst(ii)
+      if (allocated(lh_p)) then
+         lh_p(i,jts)=lh_nst(ii)
+      endif
       if (wet_nst(ii)) tsk_p(i,jts)=tsfco_nst(ii)
    enddo
 
+   
+   if (ite >= 770 .or. myrank_nst == 0) then
+      write(0,*) 'NST WRITEBACK DEBUG: rank=', myrank_nst, &
+                 ' strip=', its, ite, jts, &
+                 ' hfx_p=', minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
+                 ' qfx_p=', minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts)), &
+                 ' lh_p guarded'
+      call flush(0)
+   endif
+
+   if (allocated(lh_p)) then
+      write(0,*) 'LH_P ALLOC STATUS: allocated, min/max=', minval(lh_p(its:ite,jts)), maxval(lh_p(its:ite,jts))
+   else
+      write(0,*) 'LH_P ALLOC STATUS: not allocated; using local lh_nst only'
+   endif
    write(0,*) 'GFS_SFCL MPAS NST wrapper complete: hfx/qfx/lh=', &
               minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
               minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts)), &
