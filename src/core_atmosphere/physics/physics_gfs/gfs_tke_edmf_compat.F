@@ -24,6 +24,14 @@
      &     con_eps - 1.0_kind_phys
       real(kind=kind_phys), parameter :: con_fvirt =
      &     con_rv / con_rd - 1.0_kind_phys
+            real(kind=kind_phys), parameter :: con_pi =
+     &     3.1415926535897932384626433832795_kind_phys
+      real(kind=kind_phys), parameter :: con_sbc =
+     &     5.670374419e-8_kind_phys
+      real(kind=kind_phys), parameter :: con_omega =
+     &     7.2921150e-5_kind_phys
+      real(kind=kind_phys), parameter :: con_rocp =
+     &     con_rd / con_cp
       end module physcons
 
       module funcphys

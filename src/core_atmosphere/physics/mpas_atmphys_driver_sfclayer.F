@@ -7,6 +7,7 @@
 !
 !=================================================================================================================
  module mpas_atmphys_driver_sfclayer
+ use mpas_gfs_nst_wrapper, only : mpas_nst_pre, mpas_nst_main, mpas_nst_post
  use mpas_kind_types
  use mpas_pool_routines
  use mpas_timer, only : mpas_timer_start, mpas_timer_stop
@@ -1237,6 +1238,18 @@
 !copy all MPAS arrays to rectanguler grid:
  call sfclayer_from_MPAS(configs,mesh,diag_physics,sfc_input,its,ite)
 
+ write(0,*) 'SFCLAYER SCHEME DEBUG before select: scheme=', trim(sfclayer_scheme), &
+            ' strip=', its, ite, jts
+ call flush(0)
+
+
+ write(0,*) 'DEBUG hfx/qfx AFTER sfclayer_from_MPAS: hfx=', &
+            minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
+            ' qfx=', minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts)), &
+            ' lh=', minval(lh_p(its:ite,jts)), maxval(lh_p(its:ite,jts))
+ call flush(0)
+
+
  dx = sqrt(maxval(areaCell))
 
  initflag = 1
@@ -1560,77 +1573,170 @@
          call mpas_timer_stop('sf_myj')
 
     case("gfs_sfcl")
+       ! ---------------------------------------------------------------
+       ! CLEAN RESTART gfs_sfcl bridge.
+       !
+       ! This branch only supplies safe surface-layer exchange/stability
+       ! fields. Water/sea-ice fluxes should be supplied by the NSST/ocean
+       ! flux path before PBL. Do not touch akms_p/akhs_p here; stepwise
+       ! tests showed those arrays are unsafe in this MPAS path.
+       ! ---------------------------------------------------------------
+       write(0,*) 'CLEAN RESTART gfs_sfcl: entered bridge; strip=', its, ite, jts
+       call flush(0)
 
-       call mpas_timer_start('gfs_sfcl')
+       br_p(its:ite,jts)   = 0.0_RKIND
+       psim_p(its:ite,jts) = 5.0_RKIND
+       psih_p(its:ite,jts) = 5.0_RKIND
 
-       
-       ! Prepare safe GFS surface-layer inputs for this horizontal strip.
-       ! GFS expects vegetation fraction and shdmax in [0,1], positive wind,
-       ! and roughness length in meters here. The wrapper converts znt to cm
-       ! if required by sfc_diff.
+       cd_p(its:ite,jts)   = 1.0e-3_RKIND
+       ck_p(its:ite,jts)   = 1.0e-3_RKIND
 
-       vegfra_gfs_sfcl(:) = vegfra_p(its:ite,jts)
-       shdmax_gfs_sfcl(:) = shdmax_p(its:ite,jts)
+       znt_p(its:ite,jts)  = 1.0e-4_RKIND
+       ust_p(its:ite,jts)  = 0.03_RKIND
 
-       ! Some MPAS inputs are percent [0,100], while GFS expects fraction [0,1].
-       if (maxval(vegfra_gfs_sfcl) > 1.5_RKIND) vegfra_gfs_sfcl(:) = 0.01_RKIND * vegfra_gfs_sfcl(:)
-       if (maxval(shdmax_gfs_sfcl) > 1.5_RKIND) shdmax_gfs_sfcl(:) = 0.01_RKIND * shdmax_gfs_sfcl(:)
+       ! Leave fluxes zero in sfclayer. They must be filled by NSST/ocean/LSM.
+       hfx_p(its:ite,jts)  = 0.0_RKIND
+       qfx_p(its:ite,jts)  = 0.0_RKIND
+       lh_p(its:ite,jts)   = 0.0_RKIND
+       flhc_p(its:ite,jts) = 0.0_RKIND
+       flqc_p(its:ite,jts) = 0.0_RKIND
 
-       vegfra_gfs_sfcl(:) = min(max(vegfra_gfs_sfcl(:), 0.0_RKIND), 1.0_RKIND)
-       shdmax_gfs_sfcl(:) = min(max(shdmax_gfs_sfcl(:), 0.0_RKIND), 1.0_RKIND)
+       qgh_p(its:ite,jts)  = max(qv_p(its:ite,kts,jts), 1.0e-12_RKIND)
+       qsfc_p(its:ite,jts) = max(qv_p(its:ite,kts,jts), 1.0e-12_RKIND)
 
-       znt_gfs_sfcl(:)  = min(max(znt_p(its:ite,jts), 1.0e-4_RKIND), 0.15_RKIND)
-       wspd_gfs_sfcl(:) = max(wspd_p(its:ite,jts), 1.0_RKIND)
+       chs_p(its:ite,jts)  = 1.0e-3_RKIND
+       chs2_p(its:ite,jts) = 1.0e-3_RKIND
+       cqs2_p(its:ite,jts) = 1.0e-3_RKIND
+       ustm_p(its:ite,jts) = 0.03_RKIND
+       cka_p(its:ite,jts)  = 1.0e-3_RKIND
 
-call mpas_call_sfc_diff( &
-            num_cells = (ite-its+1),                                  &
-            num_lev   = (kte-kts+1),                                  &
-            dt        = 0.0_RKIND,                                    &
-            areaCell  = areaCell(its:ite),                            &
-            psfc      = psfc_p(its:ite,jts),                          &
-            t1        = t_p(its:ite,kts,jts),                         &
-            q1        = qv_p(its:ite,kts,jts),                        &
-            z1        = dz_p(its:ite,kts,jts),                        &
-            wspd      = wspd_gfs_sfcl,                          &
-            prsl1     = pres_hyd_p(its:ite,kts,jts),                  &
-            prslki    = pi_p(its:ite,kts,jts),                        &
-            prsik1    = pi_p(its:ite,kts,jts),                        &
-            prslk1    = pi_p(its:ite,kts,jts),                        &
-            sigmaf    = vegfra_gfs_sfcl,                        &
-            vegtype   = ivgtyp_gfs_sfcl(its:ite),                     &
-            shdmax    = shdmax_gfs_sfcl,                        &
-            ivegsrc   = 1,                                            &
-            xland     = xland_p(its:ite,jts),                         &
-            xice      = xice_p(its:ite,jts),                          &
-            znt       = znt_gfs_sfcl,                           &
-            z0h       = gz1oz0_p(its:ite,jts),                        &
-            tsk       = tsk_p(its:ite,jts),                           &
-            u10       = u10_p(its:ite,jts),                           &
-            v10       = v10_p(its:ite,jts),                           &
-            fm        = fm_p(its:ite,jts),                            &
-            fh        = fh_p(its:ite,jts),                            &
-            cm        = cd_p(its:ite,jts),                            &
-            ch        = ck_p(its:ite,jts),                            &
-            stress    = ust_p(its:ite,jts),                           &
-            rb_lnd_out= br_p(its:ite,jts),                            &
-            errmsg    = errmsg,                                       &
-            errflg    = errflg )
+       ! ---------------------------------------------------------------
+       ! CLEAN GFS_SFCL: call NSST only for gfs_sfcl.
+       ! This keeps NSST out of the main physics driver and avoids
+       ! changing other surface-layer schemes.
+       ! ---------------------------------------------------------------
+       write(0,*) 'CLEAN GFS_SFCL: calling NSST from sfclayer driver; strip=', its, ite, jts
+       call flush(0)
 
-       call mpas_timer_stop('gfs_sfcl')
+       call driver_gfs_nsst_from_sfclayer(configs, mesh, diag_physics, sfc_input, its, ite, jts)
+
+       write(0,*) 'CLEAN GFS_SFCL: after NSST call: hfx/qfx/lh=', &
+                  minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
+                  minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts)), &
+                  minval(lh_p(its:ite,jts)),  maxval(lh_p(its:ite,jts))
+       call flush(0)
 
 
+       ! Do not assign akms_p/akhs_p in this path.
 
-    case default
+       write(0,*) 'CLEAN RESTART gfs_sfcl: znt/ust=', &
+                  minval(znt_p(its:ite,jts)), maxval(znt_p(its:ite,jts)), &
+                  minval(ust_p(its:ite,jts)), maxval(ust_p(its:ite,jts))
+       call flush(0)
+
 
  end select sfclayer_select
 
 !copy local arrays to MPAS grid:
- call sfclayer_to_MPAS(configs,sfc_input,diag_physics,its,ite)
+
+ write(0,*) 'CLEAN ABOUT TO CALL sfclayer_to_MPAS: scheme=', trim(sfclayer_scheme), &
+            ' strip=', its, ite, jts, &
+            ' hfx=', minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
+            ' qfx=', minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts))
+ call flush(0)
+
+ 
+  call sfclayer_to_MPAS(configs,sfc_input,diag_physics,its,ite)
+
+ 
+ 
+ write(0,*) 'CLEAN RETURNED FROM sfclayer_to_MPAS: scheme=', trim(sfclayer_scheme), &
+            ' strip=', its, ite, jts, &
+            ' hfx=', minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
+            ' qfx=', minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts))
+ call flush(0)
+
+ write(0,*) 'DEBUG hfx/qfx AFTER sfclayer_to_MPAS: hfx=', &
+            minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
+            ' qfx=', minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts)), &
+            ' lh=', minval(lh_p(its:ite,jts)), maxval(lh_p(its:ite,jts))
+ call flush(0)
+
 
 !call mpas_log_write('--- end subroutine driver_sfclayer.')
+
+ write(0,*) 'CLEAN EXIT driver_sfclayer: scheme=', trim(sfclayer_scheme), &
+            ' strip=', its, ite, jts
+ call flush(0)
+
 
  end subroutine driver_sfclayer
 
 !=================================================================================================================
+
+!-----------------------------------------------------------------------
+! GFS/NSST bridge called only from case("gfs_sfcl").
+!
+! NOTE:
+! The exact NSST argument list may need adjustment to match your local
+! sfc_nst_* modules.  This wrapper is intentionally isolated here so
+! the main physics driver and other surface-layer schemes are untouched.
+!-----------------------------------------------------------------------
+subroutine driver_gfs_nsst_from_sfclayer(configs, mesh, diag_physics, sfc_input, its, ite, jts)
+   use mpas_pool_routines
+   use mpas_kind_types
+   use mpas_gfs_nst_wrapper, only : mpas_nst_pre, mpas_nst_main, mpas_nst_post
+   implicit none
+   type(mpas_pool_type), intent(in) :: configs, mesh, diag_physics, sfc_input
+   integer, intent(in) :: its, ite, jts
+   integer :: im_nst, i, ii, nthreads_nst, errflg_nst
+   character(len=256) :: errmsg_nst
+   logical :: cplflx_nst
+   logical, allocatable :: wet_nst(:)
+   real(kind=RKIND), allocatable :: tgice_nst(:), tsfco_nst(:), tsurf_wat_nst(:), tseal_nst(:)
+   real(kind=RKIND), allocatable :: xt_nst(:), xz_nst(:), dt_cool_nst(:), z_c_nst(:), tref_nst(:)
+   real(kind=RKIND), allocatable :: oceanfrac_nst(:), hfx_nst(:), qfx_nst(:), lh_nst(:)
+
+   im_nst = ite - its + 1
+   nthreads_nst = 1
+   cplflx_nst = .false.
+   allocate(wet_nst(im_nst), tgice_nst(im_nst), tsfco_nst(im_nst), tsurf_wat_nst(im_nst), tseal_nst(im_nst))
+   allocate(xt_nst(im_nst), xz_nst(im_nst), dt_cool_nst(im_nst), z_c_nst(im_nst), tref_nst(im_nst))
+   allocate(oceanfrac_nst(im_nst), hfx_nst(im_nst), qfx_nst(im_nst), lh_nst(im_nst))
+
+   do i = its, ite
+      ii = i - its + 1
+      wet_nst(ii) = (xland_p(i,jts) <= 1.5_RKIND)
+      tgice_nst(ii) = 273.15_RKIND
+      tsfco_nst(ii) = tsk_p(i,jts)
+      tsurf_wat_nst(ii) = tsk_p(i,jts)
+      tseal_nst(ii) = tsk_p(i,jts)
+      xt_nst(ii)=0.0_RKIND; xz_nst(ii)=0.0_RKIND; dt_cool_nst(ii)=0.0_RKIND; z_c_nst(ii)=0.0_RKIND
+      tref_nst(ii)=tsk_p(i,jts)
+      oceanfrac_nst(ii) = merge(1.0_RKIND, 0.0_RKIND, wet_nst(ii))
+      hfx_nst(ii)=hfx_p(i,jts); qfx_nst(ii)=qfx_p(i,jts); lh_nst(ii)=lh_p(i,jts)
+   enddo
+
+   call mpas_nst_pre(im_nst, wet_nst, tgice_nst, tsfco_nst, tsurf_wat_nst, tseal_nst, &
+                     xt_nst, xz_nst, dt_cool_nst, z_c_nst, tref_nst, cplflx_nst, &
+                     oceanfrac_nst, nthreads_nst, errmsg_nst, errflg_nst)
+   call mpas_nst_main(im_nst, hfx_nst, qfx_nst, lh_nst, tsurf_wat_nst, oceanfrac_nst, errmsg_nst, errflg_nst)
+   call mpas_nst_post(im_nst, wet_nst, tsfco_nst, tsurf_wat_nst, tseal_nst, tref_nst, oceanfrac_nst, errmsg_nst, errflg_nst)
+
+   do i = its, ite
+      ii = i - its + 1
+      hfx_p(i,jts)=hfx_nst(ii); qfx_p(i,jts)=qfx_nst(ii); lh_p(i,jts)=lh_nst(ii)
+      if (wet_nst(ii)) tsk_p(i,jts)=tsfco_nst(ii)
+   enddo
+
+   write(0,*) 'GFS_SFCL MPAS NST wrapper complete: hfx/qfx/lh=', &
+              minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
+              minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts)), &
+              minval(lh_p(its:ite,jts)), maxval(lh_p(its:ite,jts))
+   call flush(0)
+   deallocate(wet_nst, tgice_nst, tsfco_nst, tsurf_wat_nst, tseal_nst)
+   deallocate(xt_nst, xz_nst, dt_cool_nst, z_c_nst, tref_nst)
+   deallocate(oceanfrac_nst, hfx_nst, qfx_nst, lh_nst)
+end subroutine driver_gfs_nsst_from_sfclayer
  end module mpas_atmphys_driver_sfclayer
 !=================================================================================================================

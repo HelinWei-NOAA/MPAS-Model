@@ -287,14 +287,38 @@
 
     !call to surface-layer scheme:
     if(config_sfclayer_scheme .ne. 'off') then
+       write(0,*) 'PHYS BLOCK DEBUG: before allocate_sfclayer'
+
+       call flush(0)
+
        call allocate_sfclayer(block%configs)
+
+       write(0,*) 'PHYS BLOCK DEBUG: after allocate_sfclayer'
+
+       call flush(0)
 !$OMP PARALLEL DO
        do thread=1,nThreads
+          write(0,*) 'PHYS BLOCK DEBUG: before driver_sfclayer thread=', thread, &
+                     ' start=', cellSolveThreadStart(thread), ' end=', cellSolveThreadEnd(thread)
+          call flush(0)
           call driver_sfclayer(itimestep,block%configs,mesh,diag_physics,sfc_input, &
                                cellSolveThreadStart(thread),cellSolveThreadEnd(thread))
+          write(0,*) 'PHYS BLOCK DEBUG: after driver_sfclayer thread=', thread, &
+                     ' start=', cellSolveThreadStart(thread), ' end=', cellSolveThreadEnd(thread)
+          call flush(0)
        end do
 !$OMP END PARALLEL DO
+       write(0,*) 'PHYS BLOCK DEBUG: after sfclayer OMP END PARALLEL DO'
+       call flush(0)
+       write(0,*) 'PHYS BLOCK DEBUG: before deallocate_sfclayer'
+
+       call flush(0)
+
        call deallocate_sfclayer(block%configs)
+
+       write(0,*) 'PHYS BLOCK DEBUG: after deallocate_sfclayer'
+
+       call flush(0)
     endif
 
     !call to 1d ocean mixed-layer model
@@ -356,8 +380,14 @@
        call allocate_pbl(block%configs)
 !$OMP PARALLEL DO
        do thread=1,nThreads
+          write(0,*) 'PHYS BLOCK DEBUG: before driver_pbl thread=', thread, &
+                     ' start=', cellSolveThreadStart(thread), ' end=', cellSolveThreadEnd(thread)
+          call flush(0)
           call driver_pbl(itimestep,block%configs,state,mesh,sfc_input,diag_physics,tend_physics, &
                           cellSolveThreadStart(thread),cellSolveThreadEnd(thread))
+          write(0,*) 'PHYS BLOCK DEBUG: after driver_pbl thread=', thread, &
+                     ' start=', cellSolveThreadStart(thread), ' end=', cellSolveThreadEnd(thread)
+          call flush(0)
        end do
 !$OMP END PARALLEL DO
        call deallocate_pbl(block%configs)

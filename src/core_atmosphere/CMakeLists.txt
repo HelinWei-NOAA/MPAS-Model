@@ -113,7 +113,21 @@ set(ATMOSPHERE_CORE_PHYSICS_GFS_SOURCES
     mfpbltq_mod.F
     mfscuq_mod.F
     canopy_utils_mod.F
+
+    # GFS surface layer
     sfc_diff.F
+
+    # Required NSST support modules.
+    # These must be copied into physics/physics_gfs/ from UFS/GFS physics.
+    iw3jdn.F
+    module_nst_parameters.F90
+    module_nst_water_prop.F90
+    nst_module.F90
+
+    # Combined NSST pre/main/post wrapper
+    sfc_nst_combined.F90
+
+    # GFS TKE-EDMF PBL
     satmedmfvdifq.F
 )
 list(TRANSFORM ATMOSPHERE_CORE_PHYSICS_GFS_SOURCES PREPEND physics/physics_gfs/)
@@ -121,6 +135,15 @@ list(TRANSFORM ATMOSPHERE_CORE_PHYSICS_GFS_SOURCES PREPEND physics/physics_gfs/)
 set_source_files_properties(
     ${ATMOSPHERE_CORE_PHYSICS_GFS_SOURCES}
     PROPERTIES Fortran_FORMAT FIXED
+)
+
+# NSST sources are free-format Fortran
+set_source_files_properties(
+    physics/physics_gfs/module_nst_parameters.F90
+    physics/physics_gfs/module_nst_water_prop.F90
+    physics/physics_gfs/nst_module.F90
+    physics/physics_gfs/sfc_nst_combined.F90
+    PROPERTIES Fortran_FORMAT FREE
 )
 
 

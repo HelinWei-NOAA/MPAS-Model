@@ -1,4 +1,5 @@
 module mpas_satmedmfvdifq_wrapper_mod
+! COMBINED DEBUG PACKAGE: qfx direct, z0 capped, pressure/vertical/unit checks.
 
   use mpas_kind_types, only: RKIND
   use satmedmfvdifq, only: satmedmfvdifq_run
@@ -36,7 +37,7 @@ contains
                                      qv_mpas, qc_mpas, qi_mpas, tke_mpas,&
                                      p_mid, p_int, exner_mid,            &
                                      sw_heat, lw_heat, coszen,           &
-                                     skin_temp, shflx, lhflx, stress_in, &
+                                     skin_temp, shflx, qfx_mpas, stress_in, &
                                      z0_mpas, u10, v10, vegfra_in, rb_in, fm_in, fh_in,    &
                                      hpbl_out, kpbl_out,                 &
                                      ten_t_out, ten_u_out, ten_v_out,    &
@@ -63,7 +64,7 @@ contains
     real(kind=RKIND), intent(in) :: coszen(nCells)
     real(kind=RKIND), intent(in) :: skin_temp(nCells)
     real(kind=RKIND), intent(in) :: shflx(nCells)
-    real(kind=RKIND), intent(in) :: lhflx(nCells)
+    real(kind=RKIND), intent(in) :: qfx_mpas(nCells)
     real(kind=RKIND), intent(in) :: stress_in(nCells)
     real(kind=RKIND), intent(in) :: z0_mpas(nCells)
     real(kind=RKIND), intent(in) :: u10(nCells), v10(nCells)
@@ -83,6 +84,8 @@ contains
 
     integer :: im, km
     integer :: i, k
+    integer :: kcheck, ibad, kbad
+    integer :: nbad_tke_input, nbad_tke_output
     integer :: ntqv, ntcw, ntiw, ntrw, ntke
     integer :: index_of_temperature, index_of_x_wind
     integer :: index_of_y_wind, index_of_process_pbl
@@ -226,18 +229,25 @@ contains
       xmu(i) = max(coszen(i), 0.0_RKIND)
 
       ! UFS code uses z0 = 0.01*zorl, so zorl is in cm.
-      zorl(i) = min(max(z0_mpas(i), 1.0e-4_RKIND), 0.15_RKIND) * 100.0_RKIND
+      zorl(i) = min(max(z0_mpas(i), 1.0e-4_RKIND), 1.0e-3_RKIND) * 100.0_RKIND
 
       rho1 = prsl(i,1) / (rd * max(t1(i,1), 180.0_RKIND))
+      rho1 = min(max(rho1, 0.2_RKIND), 1.5_RKIND)
 
-      tsea(i) = skin_temp(i)
+      tsea(i) = min(max(skin_temp(i), 180.0_RKIND), 340.0_RKIND)
+
+      ! TKE-EDMF expects kinematic sensible/moisture fluxes.
+      ! shflx: W m-2 -> K m s-1
       heat(i) = shflx(i)/(rho1*cp)
+      ! qfx_mpas: kg m-2 s-1 -> kg kg-1 m s-1
+      evap(i) = qfx_mpas(i)/rho1
 
-      ! If MPAS gives latent heat flux W m-2, convert to kg m-2 s-1.
-      evap(i) = lhflx(i) / (rho1*hvap)
+      ! Temporary safety caps for debugging.
+      heat(i) = min(max(heat(i), -1.0_RKIND), 1.0_RKIND)
+      evap(i) = min(max(evap(i), -1.0e-3_RKIND), 1.0e-3_RKIND)
 
-      stress(i) = max(stress_in(i), 0.0_RKIND)
-      spd1(i) = max(sqrt(u1(i,1)**2 + v1(i,1)**2), 0.1_RKIND)
+      stress(i) = min(max(stress_in(i), 1.0e-6_RKIND), 5.0_RKIND)
+      spd1(i) = max(sqrt(u1(i,1)**2 + v1(i,1)**2), 1.0_RKIND)
 
       u10m(i) = u10(i)
       v10m(i) = v10(i)
@@ -252,7 +262,7 @@ contains
       psk(i) = prslk(i,1)
 
       ! Need real mappings later from vegetation/roughness data.
-      sigmaf(i) = vegfra_in(i)
+      sigmaf(i) = min(max(vegfra_in(i), 0.0_RKIND), 1.0_RKIND)
 !     zvfun(i) = 1.0_RKIND
       !-------------------------------------------------------
 ! Compute zvfun: function of surface roughness and vegetation
@@ -278,24 +288,119 @@ contains
     index_of_process_pbl = 1
 
 
-    print*, 'TKE-EDMF input min/max: rb=', minval(rbsoil), maxval(rbsoil), &
-         ' fm=', minval(fm), maxval(fm), ' fh=', minval(fh), maxval(fh)
-    print*, 'TKE-EDMF input min/max: zorl=', minval(zorl), maxval(zorl), &
-         ' stress=', minval(stress), maxval(stress), ' spd1=', minval(spd1), maxval(spd1)
-    print*, 'TKE-EDMF input min/max: heat=', minval(heat), maxval(heat), &
-         ' evap=', minval(evap), maxval(evap), ' sigmaf=', minval(sigmaf), maxval(sigmaf)
-    print*, 'TKE-EDMF input min/max: p=', minval(prsl), maxval(prsl), &
-         ' t=', minval(t1), maxval(t1), ' qv=', minval(q1(:,:,ntqv)), maxval(q1(:,:,ntqv))
-    call flush(0)
+    !write(0,*) 'TKE-EDMF input min/max: rb=', minval(rbsoil), maxval(rbsoil), &
+    !    ' fm=', minval(fm), maxval(fm), ' fh=', minval(fh), maxval(fh)
+    !write(0,*) 'TKE-EDMF input min/max: zorl=', minval(zorl), maxval(zorl), &
+    !    ' stress=', minval(stress), maxval(stress), ' spd1=', minval(spd1), maxval(spd1)
+    !write(0,*) 'TKE-EDMF input min/max: heat=', minval(heat), maxval(heat), &
+    !    ' evap=', minval(evap), maxval(evap), ' sigmaf=', minval(sigmaf), maxval(sigmaf)
+    !write(0,*) 'TKE-EDMF input min/max: p=', minval(prsl), maxval(prsl), &
+    !    ' t=', minval(t1), maxval(t1), ' qv=', minval(q1(:,:,ntqv)), maxval(q1(:,:,ntqv))
+   !call flush(0)
+
+
+    ! Wrapper-side vertical orientation check.
+    ! If k=1 is lowest layer, z_mid(:,1) should be small and prsl(:,1) should be large.
+    !write(0,*) 'WRAPPER VERT CHECK: z_mid k1/km=', minval(z_mid(:,1)), maxval(z_mid(:,1)), &
+    !    minval(z_mid(:,km)), maxval(z_mid(:,km))
+    !write(0,*) 'WRAPPER VERT CHECK: prsl k1/km=', minval(prsl(:,1)), maxval(prsl(:,1)), &
+    !    minval(prsl(:,km)), maxval(prsl(:,km))
+   !call flush(0)
+
+    if (minval(prsl) < 0.1_RKIND) then
+   !   !write(0,*) 'INFO full-column pressure includes upper-atmosphere levels: prsl=', minval(prsl), maxval(prsl), &
+   !              ' t1=', minval(t1), maxval(t1)
+   !   call flush(0)
+    endif
+
+    ! Lower-column sanity check. Avoid flagging the whole model top;
+    ! TKE-EDMF should mainly depend on the lower PBL-relevant levels.
+    kcheck = min(km, 30)
+    ibad = 0
+    kbad = 0
+
+    do k = 1, kcheck
+      do i = 1, im
+        if (prsl(i,k) /= prsl(i,k) .or. t1(i,k) /= t1(i,k) .or. &
+            exner_mid(i,k) /= exner_mid(i,k) .or. q1(i,k,ntqv) /= q1(i,k,ntqv)) then
+           ibad = i
+           kbad = k
+        endif
+
+        if (prsl(i,k) < 1000.0_RKIND .or. exner_mid(i,k) <= 1.0e-6_RKIND .or. &
+            t1(i,k) < 120.0_RKIND .or. t1(i,k) > 360.0_RKIND .or. &
+            q1(i,k,ntqv) < 0.0_RKIND) then
+           ibad = i
+           kbad = k
+        endif
+      enddo
+    enddo
+
+    if (ibad > 0) then
+       !write(0,*) 'BAD lower-column TKE-EDMF input before satmedmfvdifq_run'
+       !write(0,*) '  local i,k=', ibad, kbad
+       !write(0,*) '  prsl=', prsl(ibad,kbad), ' t1=', t1(ibad,kbad), &
+       !          ' qv=', q1(ibad,kbad,ntqv), ' exner=', exner_mid(ibad,kbad)
+       !write(0,*) '  lower-column ranges: prsl=', minval(prsl(:,1:kcheck)), maxval(prsl(:,1:kcheck)), &
+       !          ' t1=', minval(t1(:,1:kcheck)), maxval(t1(:,1:kcheck)), &
+       !          ' qv=', minval(q1(:,1:kcheck,ntqv)), maxval(q1(:,1:kcheck,ntqv)), &
+       !          ' exner=', minval(exner_mid(:,1:kcheck)), maxval(exner_mid(:,1:kcheck))
+      !call flush(0)
+
+       ten_t_out(:,:)  = 0.0_RKIND
+       ten_u_out(:,:)  = 0.0_RKIND
+       ten_v_out(:,:)  = 0.0_RKIND
+       ten_qv_out(:,:) = 0.0_RKIND
+       ten_qc_out(:,:) = 0.0_RKIND
+       ten_qi_out(:,:) = 0.0_RKIND
+       hpbl_out(:) = 0.0_RKIND
+       kpbl_out(:) = 1
+       errflg = 0
+       errmsg = ''
+       return
+    endif
 
     if (any(rbsoil /= rbsoil) .or. any(fm /= fm) .or. any(fh /= fh) .or. &
         any(zorl /= zorl) .or. any(heat /= heat) .or. any(evap /= evap)) then
-       print*, 'BAD TKE-EDMF input: NaN detected before satmedmfvdifq_run'
-       call flush(0)
-       errflg = 1
-       errmsg = 'NaN in TKE-EDMF wrapper input'
+       !write(0,*) 'BAD TKE-EDMF input: NaN detected before satmedmfvdifq_run'
+      !call flush(0)
+       ten_t_out(:,:)  = 0.0_RKIND
+       ten_u_out(:,:)  = 0.0_RKIND
+       ten_v_out(:,:)  = 0.0_RKIND
+       ten_qv_out(:,:) = 0.0_RKIND
+       ten_qc_out(:,:) = 0.0_RKIND
+       ten_qi_out(:,:) = 0.0_RKIND
+       hpbl_out(:) = 0.0_RKIND
+       kpbl_out(:) = 1
+       errflg = 0
+       errmsg = ''
        return
     endif
+
+
+    ! Unit/range checks for roughness and surface flux conversion.
+    if (any(z0_mpas < 0.0_RKIND) .or. any(z0_mpas > 1.0_RKIND)) then
+       !write(0,*) 'WARNING z0_mpas suspicious [m]: ', minval(z0_mpas), maxval(z0_mpas)
+      !call flush(0)
+    endif
+
+    if (any(abs(shflx) > 2000.0_RKIND)) then
+       !write(0,*) 'WARNING shflx suspicious [W/m2]: ', minval(shflx), maxval(shflx)
+      !call flush(0)
+    endif
+
+    if (any(abs(qfx_mpas) > 1.0e-3_RKIND)) then
+       !write(0,*) 'WARNING qfx suspicious [kg/m2/s]: ', minval(qfx_mpas), maxval(qfx_mpas)
+      !call flush(0)
+    endif
+
+    !write(0,*) 'UNIT CHECK TKE wrapper: z0_m=', minval(z0_mpas), maxval(z0_mpas), &
+      !  ' zorl_cm=', minval(zorl), maxval(zorl), &
+      !  ' hfx_Wm2=', minval(shflx), maxval(shflx), &
+      !  ' heat_Kms=', minval(heat), maxval(heat), &
+      !  ' qfx_kgm2s=', minval(qfx_mpas), maxval(qfx_mpas), &
+      !  ' evap_ms=', minval(evap), maxval(evap)
+   !call flush(0)
 
     call satmedmfvdifq_run(im, km, ntrac, ntcw, ntrw, ntiw, ntke,       &
          grav, pi, rd, cp, rv, hvap, hfus, fv, eps, epsm1,             &
@@ -315,33 +420,68 @@ contains
          cfg%gen_tend, cfg%ldiag3d, errmsg, errflg)
 
     if (errflg /= 0) then
-       print*, 'TKE-EDMF returned errflg=', errflg, ' errmsg=', trim(errmsg)
-       call flush(0)
+       !write(0,*) 'TKE-EDMF returned errflg=', errflg, ' errmsg=', trim(errmsg)
+      !call flush(0)
        return
     endif
 
-    print*, 'TKE-EDMF raw output min/max: tdt=', minval(tdt), maxval(tdt), &
-         ' du=', minval(du), maxval(du), ' dv=', minval(dv), maxval(dv)
-    print*, 'TKE-EDMF raw output min/max: rtg_qv=', minval(rtg(:,:,ntqv)), maxval(rtg(:,:,ntqv)), &
-         ' rtg_qc=', minval(rtg(:,:,ntcw)), maxval(rtg(:,:,ntcw)), &
-         ' rtg_qi=', minval(rtg(:,:,ntiw)), maxval(rtg(:,:,ntiw))
-    print*, 'TKE-EDMF raw output min/max: hpbl=', minval(hpbl), maxval(hpbl), &
-         ' kpbl=', minval(kpbl), maxval(kpbl), ' tke=', minval(q1(:,:,ntke)), maxval(q1(:,:,ntke))
-    call flush(0)
+    !write(0,*) 'TKE-EDMF raw output min/max: tdt=', minval(tdt), maxval(tdt), &
+     !   ' du=', minval(du), maxval(du), ' dv=', minval(dv), maxval(dv)
+    !write(0,*) 'TKE-EDMF raw output min/max: rtg_qv=', minval(rtg(:,:,ntqv)), maxval(rtg(:,:,ntqv)), &
+     !   ' rtg_qc=', minval(rtg(:,:,ntcw)), maxval(rtg(:,:,ntcw)), &
+     !   ' rtg_qi=', minval(rtg(:,:,ntiw)), maxval(rtg(:,:,ntiw))
+    !write(0,*) 'TKE-EDMF raw output min/max: hpbl=', minval(hpbl), maxval(hpbl), &
+     !   ' kpbl=', minval(kpbl), maxval(kpbl), ' tke=', minval(q1(:,:,ntke)), maxval(q1(:,:,ntke))
+   !call flush(0)
 
     do k = 1, km
       do i = 1, im
-        ten_t_out(i,k) = tdt(i,k) / exner_mid(i,k)
+        if (exner_mid(i,k) > 1.0e-8_RKIND) then
+          ten_t_out(i,k) = tdt(i,k) / exner_mid(i,k)
+        else
+          ten_t_out(i,k) = 0.0_RKIND
+        endif
+
         ten_u_out(i,k) = du(i,k)
         ten_v_out(i,k) = dv(i,k)
-        
-        ten_qv_out(i,k) = rtg(i,k,ntqv) 
+
+        ten_qv_out(i,k) = rtg(i,k,ntqv)
         ten_qc_out(i,k) = rtg(i,k,ntcw)
         ten_qi_out(i,k) = rtg(i,k,ntiw)
 
-        tke_mpas(i,k) = max(q1(i,k,ntke), 0.0_RKIND)
+        ! Temporary safety caps for debugging coupled gfs_sfcl + TKE-EDMF.
+        ten_t_out(i,k)  = min(max(ten_t_out(i,k),  -2.0e-4_RKIND), 2.0e-4_RKIND)
+        ten_qv_out(i,k) = min(max(ten_qv_out(i,k), -1.0e-6_RKIND), 1.0e-6_RKIND)
+        ten_qc_out(i,k) = min(max(ten_qc_out(i,k), -1.0e-7_RKIND), 1.0e-7_RKIND)
+        ten_qi_out(i,k) = min(max(ten_qi_out(i,k), -1.0e-8_RKIND), 1.0e-8_RKIND)
+
+        tke_mpas(i,k) = min(max(q1(i,k,ntke), 1.0e-9_RKIND), 10.0_RKIND)
+        ten_t_out(i,k) = 0.0_RKIND
+        ten_u_out(i,k)  = 0.0_RKIND
+        ten_v_out(i,k)  = 0.0_RKIND
+        ten_qv_out(i,k) = 0.0_RKIND
+        ten_qc_out(i,k) = 0.0_RKIND
+        ten_qi_out(i,k) = 0.0_RKIND
+
       enddo
     enddo
+
+    !write(0,*) 'TKE-EDMF final tendencies: rth=', minval(ten_t_out), maxval(ten_t_out), &
+     !   ' ru=', minval(ten_u_out), maxval(ten_u_out), ' rv=', minval(ten_v_out), maxval(ten_v_out)
+    !write(0,*) 'TKE-EDMF final q/tke: qv=', minval(ten_qv_out), maxval(ten_qv_out), &
+     !   ' qc=', minval(ten_qc_out), maxval(ten_qc_out), ' qi=', minval(ten_qi_out), maxval(ten_qi_out), &
+     !   ' tke=', minval(tke_mpas), maxval(tke_mpas)
+  ! call flush(0)
+
+    if (any(ten_t_out /= ten_t_out) .or. any(ten_u_out /= ten_u_out) .or. &
+        any(ten_v_out /= ten_v_out) .or. any(ten_qv_out /= ten_qv_out) .or. &
+        any(tke_mpas /= tke_mpas)) then
+       !write(0,*) 'BAD TKE-EDMF output: NaN detected after satmedmfvdifq_run'
+  !    call flush(0)
+       errflg = 1
+       errmsg = 'NaN in TKE-EDMF wrapper output'
+       return
+    endif
 
     do i = 1, im
       hpbl_out(i) = hpbl(i)

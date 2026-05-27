@@ -555,6 +555,10 @@
  integer,dimension(:),pointer            :: lowlyr
 !-----------------------------------------------------------------------------------------------------------------
 
+
+ write(0,*) 'ENTER pbl_from_MPAS STEP DEBUG: its/ite/jts=', its, ite, jts
+ call flush(0)
+
  call mpas_pool_get_config(configs,'config_pbl_scheme',pbl_scheme)
 
  call mpas_pool_get_array(diag_physics,'hfx' ,hfx )
@@ -985,6 +989,10 @@
  enddo
  enddo
  enddo
+
+ write(0,*) 'EXIT pbl_from_MPAS STEP DEBUG'
+ call flush(0)
+
 
  end subroutine pbl_from_MPAS
 
@@ -1477,6 +1485,31 @@
  real(kind=RKIND), dimension(its:ite) :: znt_tkeedmf_pbl
  real(kind=RKIND), dimension(its:ite) :: vegfra_tkeedmf_pbl
  real(kind=RKIND), dimension(its:ite) :: stress_tkeedmf_safe_p
+ real(kind=RKIND), dimension(its:ite) :: qfx_tkeedmf_safe_p
+
+ integer :: n_zero_hfxqfx_tkeedmf
+ integer :: n_bad_hfxqfx_tkeedmf
+ integer :: n_tke_floor_tkeedmf
+ integer :: n_bad_tke_tkeedmf
+
+ integer :: n_bad_hfx_pbl
+ integer :: n_bad_qfx_pbl
+ integer :: n_bad_lh_pbl
+ integer :: n_zero_hfxqfx_pbl
+ integer :: n_bad_hfx_pbl2
+ integer :: n_bad_qfx_pbl2
+ integer :: n_bad_lh_pbl2
+ integer :: n_zero_hfxqfx_pbl2
+ integer :: i_flux_pbl
+ real(kind=RKIND) :: rho_flux_pbl
+ real(kind=RKIND) :: wspd_flux_pbl
+ real(kind=RKIND) :: es_flux_pbl
+ real(kind=RKIND) :: qsfc_flux_pbl
+
+ real(kind=RKIND), allocatable :: lh_pbl_safe(:,:)
+ integer :: i_lh_safe, j_lh_safe
+ write(0,*) 'ENTER driver_pbl TOP DEBUG: its/ite/jts=', its, ite, jts
+ call flush(0)
 
  errmsg = ' '
  errflg = 0
@@ -1488,9 +1521,52 @@
  call mpas_pool_get_config(configs,'config_pbl_scheme'  ,pbl_scheme         )
 
 !copy MPAS arrays to local arrays:
+ write(0,*) 'PBL DEBUG before pbl_from_MPAS: its/ite/jts=', its, ite, jts
+ call flush(0)
  call pbl_from_MPAS(configs,state,mesh,sfc_input,diag_physics,tend_physics,its,ite)
 
- initflag = 1
+       ! CLEAN RESTART: do not read lh_p in PBL for gfs_sfcl path.
+       ! Build local latent heat diagnostic from valid qfx_p.
+       if (.not. allocated(lh_pbl_safe)) allocate(lh_pbl_safe(its:ite,jts:jte))
+       do j_lh_safe = jts, jte
+          do i_lh_safe = its, ite
+             lh_pbl_safe(i_lh_safe,j_lh_safe) = xlv * qfx_p(i_lh_safe,j_lh_safe)
+          enddo
+       enddo
+       write(0,*) 'CLEAN RESTART PBL: computed LH from qfx_p=', &
+                  minval(lh_pbl_safe(its:ite,jts:jte)), &
+                  maxval(lh_pbl_safe(its:ite,jts:jte))
+       call flush(0)
+
+
+       ! ---------------------------------------------------------------
+       ! FINAL TEST: do not read lh_p; it is unsafe in this gfs_sfcl path.
+       ! Build local latent heat diagnostic from valid qfx_p.
+       ! ---------------------------------------------------------------
+       if (.not. allocated(lh_pbl_safe)) allocate(lh_pbl_safe(its:ite,jts:jte))
+
+       do j_lh_safe = jts, jte
+          do i_lh_safe = its, ite
+             lh_pbl_safe(i_lh_safe,j_lh_safe) = xlv * qfx_p(i_lh_safe,j_lh_safe)
+          enddo
+       enddo
+
+       write(0,*) 'FINAL TEST: computed lh_pbl_safe from qfx_p: ', &
+                  minval(lh_pbl_safe(its:ite,jts:jte)), &
+                  maxval(lh_pbl_safe(its:ite,jts:jte))
+       call flush(0)
+
+
+ write(0,*) 'PBL DEBUG after pbl_from_MPAS returned successfully'
+ call flush(0)
+
+
+
+
+
+
+
+initflag = 1
  if(config_do_restart .or. itimestep > 1) initflag = 0
 
  pbl_select: select case (trim(pbl_scheme))
@@ -1553,6 +1629,190 @@
        tke_edmf_errmsg = ''
        tke_edmf_errflg = 0
 
+
+
+
+       ! ------------------------------------------------------------------
+       ! NEXT DEBUG: confirm what PBL receives from sfclayer_to_MPAS.
+       ! If sfclayer shows nonzero hfx/qfx but this shows zero/Inf, the problem
+       ! is in pbl_from_MPAS/copy path or a different flux array namespace.
+       ! ------------------------------------------------------------------
+       n_bad_hfx_pbl2 = count(hfx_p(its:ite,jts) /= hfx_p(its:ite,jts)) + &
+                        count(abs(hfx_p(its:ite,jts)) > 2000.0_RKIND)
+       n_bad_qfx_pbl2 = count(qfx_p(its:ite,jts) /= qfx_p(its:ite,jts)) + &
+                        count(abs(qfx_p(its:ite,jts)) > 1.0e-3_RKIND)
+       n_bad_lh_pbl2  = count(lh_p(its:ite,jts)  /= lh_p(its:ite,jts))  + &
+                        count(abs(lh_p(its:ite,jts)) > 3000.0_RKIND)
+       n_zero_hfxqfx_pbl2 = count(abs(hfx_p(its:ite,jts)) <= 1.0e-20_RKIND .and. &
+                                  abs(qfx_p(its:ite,jts)) <= 1.0e-20_RKIND)
+
+       write(0,*) 'PBL COPY-PATH CHECK: strip=', its, ite, jts, &
+                  ' hfx=', minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
+                  ' qfx=', minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts))
+       write(0,*) 'PBL COPY-PATH COUNTS: bad_hfx=', n_bad_hfx_pbl2, &
+                  ' bad_qfx=', n_bad_qfx_pbl2, ' bad_lh=', n_bad_lh_pbl2, &
+                  ' zero_hfxqfx=', n_zero_hfxqfx_pbl2, ' of ', (ite-its+1)
+       write(0,*) 'PBL COPY-PATH SURFACE: xland=', minval(xland_p(its:ite,jts)), maxval(xland_p(its:ite,jts)), &
+                  ' xice=', minval(xice_p(its:ite,jts)), maxval(xice_p(its:ite,jts)), &
+                  ' tsk=', minval(tsk_p(its:ite,jts)), maxval(tsk_p(its:ite,jts)), &
+                  ' znt=', minval(znt_p(its:ite,jts)), maxval(znt_p(its:ite,jts))
+       call flush(0)
+
+       where (hfx_p(its:ite,jts) /= hfx_p(its:ite,jts) .or. &
+              abs(hfx_p(its:ite,jts)) > 2000.0_RKIND)
+          hfx_p(its:ite,jts) = 0.0_RKIND
+       endwhere
+
+       where (qfx_p(its:ite,jts) /= qfx_p(its:ite,jts) .or. &
+              abs(qfx_p(its:ite,jts)) > 1.0e-3_RKIND)
+          qfx_p(its:ite,jts) = 0.0_RKIND
+       endwhere
+
+       where (lh_p(its:ite,jts) /= lh_p(its:ite,jts) .or. &
+              abs(lh_p(its:ite,jts)) > 3000.0_RKIND)
+          lh_p(its:ite,jts) = 0.0_RKIND
+       endwhere
+
+       write(0,*) 'PBL COPY-PATH AFTER SANITIZE: hfx=', &
+                  minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
+                  ' qfx=', minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts))
+       call flush(0)
+
+       ! ------------------------------------------------------------------
+       ! PBL-side surface flux receive/sanitize check.
+       ! If sfclayer_to_MPAS successfully pushed hfx/qfx/lh into diag_physics,
+       ! they should be finite here.  If qfx/lh are Inf/NaN here, the problem
+       ! is between sfclayer_to_MPAS and pbl_from_MPAS or in the PBL copy path.
+       ! ------------------------------------------------------------------
+       n_bad_hfx_pbl = count(hfx_p(its:ite,jts) /= hfx_p(its:ite,jts)) + &
+                       count(abs(hfx_p(its:ite,jts)) > 2000.0_RKIND)
+       n_bad_qfx_pbl = count(qfx_p(its:ite,jts) /= qfx_p(its:ite,jts)) + &
+                       count(abs(qfx_p(its:ite,jts)) > 1.0e-3_RKIND)
+       n_bad_lh_pbl  = count(lh_p(its:ite,jts)  /= lh_p(its:ite,jts))  + &
+                       count(abs(lh_p(its:ite,jts)) > 3000.0_RKIND)
+       n_zero_hfxqfx_pbl = count(abs(hfx_p(its:ite,jts)) <= 1.0e-20_RKIND .and. &
+                                 abs(qfx_p(its:ite,jts)) <= 1.0e-20_RKIND)
+
+       write(0,*) 'PBL RECEIVE flux before sanitize: strip=', its, ite, jts, &
+                  ' hfx=', minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
+                  ' qfx=', minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts))
+       write(0,*) 'PBL RECEIVE flux counts: bad_hfx=', n_bad_hfx_pbl, &
+                  ' bad_qfx=', n_bad_qfx_pbl, ' bad_lh=', n_bad_lh_pbl, &
+                  ' zero_hfxqfx=', n_zero_hfxqfx_pbl, ' of ', (ite-its+1)
+       call flush(0)
+
+       where (hfx_p(its:ite,jts) /= hfx_p(its:ite,jts) .or. &
+              abs(hfx_p(its:ite,jts)) > 2000.0_RKIND)
+          hfx_p(its:ite,jts) = 0.0_RKIND
+       endwhere
+
+       where (qfx_p(its:ite,jts) /= qfx_p(its:ite,jts) .or. &
+              abs(qfx_p(its:ite,jts)) > 1.0e-3_RKIND)
+          qfx_p(its:ite,jts) = 0.0_RKIND
+       endwhere
+
+       where (lh_p(its:ite,jts) /= lh_p(its:ite,jts) .or. &
+              abs(lh_p(its:ite,jts)) > 3000.0_RKIND)
+          lh_p(its:ite,jts) = 0.0_RKIND
+       endwhere
+
+       write(0,*) 'PBL RECEIVE flux after sanitize: hfx=', &
+                  minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
+                  ' qfx=', minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts))
+       call flush(0)
+
+
+       ! ------------------------------------------------------------------
+       ! PBL-side supplemental fluxes for TKE-EDMF only.
+       !
+       ! Do this here instead of inside sfclayer_to_MPAS/copy-back path.
+       ! If hfx/qfx arrive as zero or invalid for this strip, compute finite
+       ! TKE-EDMF input fluxes locally using ck_p, surface-air differences,
+       ! and saturation specific humidity at skin temperature.
+       ! ------------------------------------------------------------------
+       if (maxval(abs(hfx_p(its:ite,jts))) <= 1.0e-20_RKIND .or. &
+           maxval(abs(qfx_p(its:ite,jts))) <= 1.0e-20_RKIND .or. &
+           any(qfx_p(its:ite,jts) /= qfx_p(its:ite,jts)) .or. &
+           any(abs(qfx_p(its:ite,jts)) > 1.0e-3_RKIND) .or. &
+           any(lh_p(its:ite,jts) /= lh_p(its:ite,jts)) .or. &
+           any(abs(lh_p(its:ite,jts)) > 3000.0_RKIND)) then
+
+          do i_flux_pbl = its, ite
+             rho_flux_pbl = psfc_p(i_flux_pbl,jts) / &
+                  (r_d * max(t_p(i_flux_pbl,kts,jts), 180.0_RKIND))
+             rho_flux_pbl = min(max(rho_flux_pbl, 0.2_RKIND), 1.5_RKIND)
+
+             wspd_flux_pbl = max(wspd_p(i_flux_pbl,jts), 1.0_RKIND)
+
+             ck_p(i_flux_pbl,jts) = min(max(ck_p(i_flux_pbl,jts), 1.0e-4_RKIND), 1.0e-2_RKIND)
+
+             es_flux_pbl = 611.2_RKIND * exp(17.67_RKIND * &
+                  (tsk_p(i_flux_pbl,jts) - 273.15_RKIND) / &
+                  max(tsk_p(i_flux_pbl,jts) - 29.65_RKIND, 1.0_RKIND))
+             es_flux_pbl = min(max(es_flux_pbl, 1.0_RKIND), 0.95_RKIND * psfc_p(i_flux_pbl,jts))
+
+             qsfc_flux_pbl = 0.622_RKIND * es_flux_pbl / &
+                  max(psfc_p(i_flux_pbl,jts) - 0.378_RKIND * es_flux_pbl, 1000.0_RKIND)
+             qsfc_flux_pbl = min(max(qsfc_flux_pbl, 1.0e-8_RKIND), 0.05_RKIND)
+
+             hfx_p(i_flux_pbl,jts) = rho_flux_pbl * cp * ck_p(i_flux_pbl,jts) * wspd_flux_pbl * &
+                  (tsk_p(i_flux_pbl,jts) - t_p(i_flux_pbl,kts,jts))
+             qfx_p(i_flux_pbl,jts) = rho_flux_pbl * ck_p(i_flux_pbl,jts) * wspd_flux_pbl * &
+                  (qsfc_flux_pbl - qv_p(i_flux_pbl,kts,jts))
+
+             hfx_p(i_flux_pbl,jts) = min(max(hfx_p(i_flux_pbl,jts), -100.0_RKIND), 300.0_RKIND)
+             qfx_p(i_flux_pbl,jts) = min(max(qfx_p(i_flux_pbl,jts), -1.0e-4_RKIND), 3.0e-4_RKIND)
+             lh_pbl_safe(i_flux_pbl,jts)  = xlv * qfx_p(i_flux_pbl,jts)
+
+             if (hfx_p(i_flux_pbl,jts) /= hfx_p(i_flux_pbl,jts)) hfx_p(i_flux_pbl,jts) = 0.0_RKIND
+             if (qfx_p(i_flux_pbl,jts) /= qfx_p(i_flux_pbl,jts)) qfx_p(i_flux_pbl,jts) = 0.0_RKIND
+             if (lh_pbl_safe(i_flux_pbl,jts)  /= lh_pbl_safe(i_flux_pbl,jts))  lh_pbl_safe(i_flux_pbl,jts)  = 0.0_RKIND
+          enddo
+
+          write(0,*) 'PBL SUPPLEMENTAL FLUX computed for TKE-EDMF: hfx=', &
+                     minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
+                     ' qfx=', minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts))
+          call flush(0)
+       endif
+
+       ! Diagnose why hfx/qfx are zero and TKE is at the floor before staging TKE-EDMF inputs.
+       n_zero_hfxqfx_tkeedmf = count(abs(hfx_p(its:ite,jts)) <= 1.0e-20_RKIND .and. &
+                                     abs(qfx_p(its:ite,jts)) <= 1.0e-20_RKIND)
+       n_bad_hfxqfx_tkeedmf = count(hfx_p(its:ite,jts) /= hfx_p(its:ite,jts)) + &
+                              count(qfx_p(its:ite,jts) /= qfx_p(its:ite,jts)) + &
+                              count(abs(hfx_p(its:ite,jts)) > 2000.0_RKIND) + &
+                              count(abs(qfx_p(its:ite,jts)) > 1.0e-3_RKIND)
+
+       n_tke_floor_tkeedmf = count(tkepbl_p(its:ite,kts:kte,jts) <= 1.01e-9_RKIND)
+       n_bad_tke_tkeedmf = count(tkepbl_p(its:ite,kts:kte,jts) /= tkepbl_p(its:ite,kts:kte,jts))
+
+       if (n_zero_hfxqfx_tkeedmf > 0 .or. n_bad_hfxqfx_tkeedmf > 0 .or. &
+           n_tke_floor_tkeedmf > 0 .or. n_bad_tke_tkeedmf > 0) then
+          write(0,*) 'PBL DEBUG pre-stage: strip=', its, ite, jts, &
+                     ' zero_hfxqfx=', n_zero_hfxqfx_tkeedmf, ' of ', (ite-its+1), &
+                     ' bad_flux_count=', n_bad_hfxqfx_tkeedmf
+          write(0,*) 'PBL DEBUG pre-stage flux ranges: hfx=', minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
+                     ' qfx=', minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts)), &
+                     ' ust=', minval(ust_p(its:ite,jts)), maxval(ust_p(its:ite,jts))
+          write(0,*) 'PBL DEBUG pre-stage surface: xland=', minval(xland_p(its:ite,jts)), maxval(xland_p(its:ite,jts)), &
+                     ' tsk=', minval(tsk_p(its:ite,jts)), maxval(tsk_p(its:ite,jts)), &
+                     ' znt=', minval(znt_p(its:ite,jts)), maxval(znt_p(its:ite,jts))
+          write(0,*) 'PBL DEBUG pre-stage TKE: floor_count=', n_tke_floor_tkeedmf, ' of ', &
+                     (ite-its+1)*(kte-kts+1), ' bad_tke_count=', n_bad_tke_tkeedmf, &
+                     ' tke=', minval(tkepbl_p(its:ite,kts:kte,jts)), maxval(tkepbl_p(its:ite,kts:kte,jts))
+          call flush(0)
+       endif
+
+
+       ! Debug safeguard: if MPAS TKE is completely missing/floor, seed a tiny
+       ! nonzero value before passing to TKE-EDMF.  Remove after identifying the
+       ! proper prognostic TKE initialization/update path.
+       if (maxval(tkepbl_p(its:ite,kts:kte,jts)) <= 1.01e-9_RKIND) then
+          tkepbl_p(its:ite,kts:kte,jts) = 1.0e-6_RKIND
+          write(0,*) 'PBL DEBUG: tkepbl_p was at floor; seeded to 1e-6 for TKE-EDMF debug.'
+          call flush(0)
+       endif
+
        if (.not. allocated(coszen_tkeedmf_p)) then
           allocate(coszen_tkeedmf_p(ims:ime,jms:jme))
           allocate(lh_tkeedmf_p(ims:ime,jms:jme))
@@ -1576,7 +1836,12 @@
              hfx_p(i,j) = 0.0_RKIND
           endif
 
-          lh_tkeedmf_p(i,j) = qfx_p(i,j) * xlv
+          ! Pass moisture flux directly to the TKE-EDMF wrapper.
+          ! qfx_tkeedmf_safe_p is kg m-2 s-1; wrapper converts to kg kg-1 m s-1.
+          qfx_tkeedmf_safe_p(i) = qfx_p(i,j)
+
+          ! Keep latent heat flux only as a diagnostic quantity.
+          lh_tkeedmf_p(i,j) = qfx_tkeedmf_safe_p(i) * xlv
 
           if (lh_tkeedmf_p(i,j) /= lh_tkeedmf_p(i,j) .or. abs(lh_tkeedmf_p(i,j)) > 3000.0_RKIND) then
              lh_tkeedmf_p(i,j) = 0.0_RKIND
@@ -1604,36 +1869,86 @@
        enddo
 
        
+
+       ! Diagnose staged TKE-EDMF surface forcing after qfx/hfx guards.
+       if (maxval(abs(hfx_p(its:ite,jts))) <= 1.0e-20_RKIND .or. &
+           maxval(abs(qfx_tkeedmf_safe_p)) <= 1.0e-20_RKIND .or. &
+           maxval(tkepbl_p(its:ite,kts:kte,jts)) <= 1.01e-9_RKIND) then
+          write(0,*) 'PBL DEBUG post-stage: hfx=', minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
+                     ' qfx_safe=', minval(qfx_tkeedmf_safe_p), maxval(qfx_tkeedmf_safe_p), &
+                     ' lh_diag=', minval(lh_tkeedmf_p(its:ite,jts)), maxval(lh_tkeedmf_p(its:ite,jts))
+          write(0,*) 'PBL DEBUG post-stage stress/zmid: stress=', minval(stress_tkeedmf_p(its:ite,jts)), &
+                     maxval(stress_tkeedmf_p(its:ite,jts)), &
+                     ' zmid_low=', minval(zmid_tkeedmf_p(its:ite,kts,jts)), maxval(zmid_tkeedmf_p(its:ite,kts,jts))
+          write(0,*) 'PBL DEBUG interpretation: if hfx/qfx are zero here, check pbl_from_MPAS or surface/LSM order; ', &
+                     'if TKE floor_count is large, TKE is not being initialized/advanced before this call.'
+          call flush(0)
+       endif
+
        ! Prepare and diagnose surface-layer inputs passed to TKE-EDMF.
        ! These should come from the selected surface-layer scheme through normal MPAS arrays.
        rb_tkeedmf_pbl(:) = min(max(br_p(its:ite,jts), -1.0_RKIND), 1.0_RKIND)
        fm_tkeedmf_pbl(:) = min(max(psim_p(its:ite,jts), 1.0e-6_RKIND), 5.0_RKIND)
        fh_tkeedmf_pbl(:) = min(max(psih_p(its:ite,jts), 1.0e-6_RKIND), 5.0_RKIND)
-       znt_tkeedmf_pbl(:) = min(max(znt_p(its:ite,jts), 1.0e-4_RKIND), 0.15_RKIND)
+       znt_tkeedmf_pbl(:) = min(max(znt_p(its:ite,jts), 1.0e-4_RKIND), 1.0e-3_RKIND)
        vegfra_tkeedmf_pbl(:) = vegfra_p(its:ite,jts)
        if (maxval(vegfra_tkeedmf_pbl) > 1.5_RKIND) vegfra_tkeedmf_pbl(:) = 0.01_RKIND * vegfra_tkeedmf_pbl(:)
        vegfra_tkeedmf_pbl(:) = min(max(vegfra_tkeedmf_pbl(:), 0.0_RKIND), 1.0_RKIND)
        stress_tkeedmf_safe_p(:) = min(max(stress_tkeedmf_p(its:ite,jts), 1.0e-6_RKIND), 5.0_RKIND)
 
-       print*, 'PBL raw sfcl inputs before limiting: br=', minval(br_p(its:ite,jts)), maxval(br_p(its:ite,jts)), &
+       write(0,*) 'PBL raw sfcl inputs before limiting: br=', minval(br_p(its:ite,jts)), maxval(br_p(its:ite,jts)), &
                   ' psim=', minval(psim_p(its:ite,jts)), maxval(psim_p(its:ite,jts)), &
                   ' psih=', minval(psih_p(its:ite,jts)), maxval(psih_p(its:ite,jts)), &
                   ' znt=', minval(znt_p(its:ite,jts)), maxval(znt_p(its:ite,jts))
-       print*, 'PBL before TKE-EDMF: znt=', minval(znt_tkeedmf_pbl), maxval(znt_tkeedmf_pbl), &
+       write(0,*) 'PBL before TKE-EDMF: znt=', minval(znt_tkeedmf_pbl), maxval(znt_tkeedmf_pbl), &
                   ' rb=', minval(rb_tkeedmf_pbl), maxval(rb_tkeedmf_pbl), &
                   ' fm=', minval(fm_tkeedmf_pbl), maxval(fm_tkeedmf_pbl), &
                   ' fh=', minval(fh_tkeedmf_pbl), maxval(fh_tkeedmf_pbl)
-       print*, 'PBL before TKE-EDMF guarded fluxes: hfx=', minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
-                  ' qfx=', minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts)), &
-                  ' lh=', minval(lh_tkeedmf_p(its:ite,jts)), maxval(lh_tkeedmf_p(its:ite,jts)), &
+       write(0,*) 'PBL before TKE-EDMF guarded fluxes: hfx=', minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
+                  ' qfx_safe=', minval(qfx_tkeedmf_safe_p), maxval(qfx_tkeedmf_safe_p), &
+                  ' lh_diag=', minval(lh_tkeedmf_p(its:ite,jts)), maxval(lh_tkeedmf_p(its:ite,jts)), &
                   ' stress=', minval(stress_tkeedmf_safe_p), maxval(stress_tkeedmf_safe_p)
        call flush(0)
 
        if (maxval(abs(hfx_p(its:ite,jts))) == 0.0_RKIND .and. &
-           maxval(abs(qfx_p(its:ite,jts))) == 0.0_RKIND) then
-          print*, 'WARNING: TKE-EDMF called with zero hfx and zero qfx for this strip.'
+           maxval(abs(qfx_tkeedmf_safe_p)) == 0.0_RKIND) then
+          write(0,*) 'WARNING: TKE-EDMF called with zero hfx and zero qfx for this strip.'
           call flush(0)
        endif
+
+
+
+       write(0,*) 'PBL STAGED FLUX CHECK: hfx=', minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
+                  ' qfx_safe=', minval(qfx_tkeedmf_safe_p), maxval(qfx_tkeedmf_safe_p), &
+                  ' lh_diag=', minval(lh_tkeedmf_p(its:ite,jts)), maxval(lh_tkeedmf_p(its:ite,jts))
+       call flush(0)
+
+       write(0,*) 'PBL UNIT CHECK before wrapper: znt_m=', minval(znt_tkeedmf_pbl), maxval(znt_tkeedmf_pbl), &
+                  ' qfx_kgm2s=', minval(qfx_tkeedmf_safe_p), maxval(qfx_tkeedmf_safe_p), &
+                  ' hfx_Wm2=', minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts))
+       call flush(0)
+
+
+       ! Vertical orientation check:
+       ! If kts is the lowest model level, zmid(kts) should be near the surface
+       ! and pressure at kts should be much larger than pressure at kte.
+       write(0,*) 'VERT CHECK before TKE-EDMF: zmid_kts=', &
+                  minval(zmid_tkeedmf_p(its:ite,kts,jts)), maxval(zmid_tkeedmf_p(its:ite,kts,jts)), &
+                  ' zmid_kte=', minval(zmid_tkeedmf_p(its:ite,kte,jts)), maxval(zmid_tkeedmf_p(its:ite,kte,jts))
+       write(0,*) 'VERT CHECK before TKE-EDMF: p_kts=', &
+                  minval(pres_hyd_p(its:ite,kts,jts)), maxval(pres_hyd_p(its:ite,kts,jts)), &
+                  ' p_kte=', minval(pres_hyd_p(its:ite,kte,jts)), maxval(pres_hyd_p(its:ite,kte,jts))
+       write(0,*) 'VERT CHECK before TKE-EDMF: t_kts=', &
+                  minval(t_p(its:ite,kts,jts)), maxval(t_p(its:ite,kts,jts)), &
+                  ' t_kte=', minval(t_p(its:ite,kte,jts)), maxval(t_p(its:ite,kte,jts))
+       call flush(0)
+
+       if (minval(pres_hyd_p(its:ite,kts,jts)) < minval(pres_hyd_p(its:ite,kte,jts))) then
+          write(0,*) 'WARNING: vertical index may be top-down for TKE-EDMF call; kts pressure < kte pressure.'
+          write(0,*) 'If so, reverse all vertical arrays before calling satmedmfvdifq.'
+          call flush(0)
+       endif
+
 
 call mpas_call_satmedmfvdifq(                                  &
             (ite-its+1), (kte-kts+1), 4, dt_pbl,                      &
@@ -1655,7 +1970,7 @@ call mpas_call_satmedmfvdifq(                                  &
             coszen_tkeedmf_p(its:ite,jts),                            &
             tsk_p(its:ite,jts),                                       &
             hfx_p(its:ite,jts),                                       &
-            lh_tkeedmf_p(its:ite,jts),                                &
+            qfx_tkeedmf_safe_p,                                       &
             stress_tkeedmf_safe_p,                            &
             znt_tkeedmf_pbl,                                       &
             u10_p(its:ite,jts),                                       &
@@ -1675,11 +1990,18 @@ call mpas_call_satmedmfvdifq(                                  &
             tke_edmf_cfg, tke_edmf_errmsg, tke_edmf_errflg)
 
 
-       print*, 'PBL after TKE-EDMF: rth=', minval(rthblten_p(its:ite,kts:kte,jts)), &
+
+       if (maxval(tkepbl_p(its:ite,kts:kte,jts)) <= 1.01e-9_RKIND) then
+          write(0,*) 'PBL DEBUG after wrapper: tkepbl_p remains at floor: ', &
+                     minval(tkepbl_p(its:ite,kts:kte,jts)), maxval(tkepbl_p(its:ite,kts:kte,jts))
+          call flush(0)
+       endif
+
+       write(0,*) 'PBL after TKE-EDMF: rth=', minval(rthblten_p(its:ite,kts:kte,jts)), &
                   maxval(rthblten_p(its:ite,kts:kte,jts)), &
                   ' ru=', minval(rublten_p(its:ite,kts:kte,jts)), maxval(rublten_p(its:ite,kts:kte,jts)), &
                   ' rv=', minval(rvblten_p(its:ite,kts:kte,jts)), maxval(rvblten_p(its:ite,kts:kte,jts))
-       print*, 'PBL after TKE-EDMF: qv=', minval(rqvblten_p(its:ite,kts:kte,jts)), &
+       write(0,*) 'PBL after TKE-EDMF: qv=', minval(rqvblten_p(its:ite,kts:kte,jts)), &
                   maxval(rqvblten_p(its:ite,kts:kte,jts)), &
                   ' qc=', minval(rqcblten_p(its:ite,kts:kte,jts)), maxval(rqcblten_p(its:ite,kts:kte,jts)), &
                   ' qi=', minval(rqiblten_p(its:ite,kts:kte,jts)), maxval(rqiblten_p(its:ite,kts:kte,jts))
@@ -1688,7 +2010,6 @@ call mpas_call_satmedmfvdifq(                                  &
        if (tke_edmf_errflg /= 0) then
           write(*,*) 'FATAL in bl_tke_edmf: ', trim(tke_edmf_errmsg)
           call mpas_timer_stop('bl_tke_edmf')
-          call mpas_timer_stop('PBL Scheme')
           stop 1
        endif
 
@@ -2033,6 +2354,20 @@ call mpas_call_satmedmfvdifq(                                  &
  call pbl_to_MPAS(configs,state,diag_physics,tend_physics,its,ite)
 
 !call mpas_log_write('--- end subroutine driver_pbl.')
+
+ if (allocated(lh_pbl_safe)) then
+    write(0,*) 'FINAL TEST: deallocating lh_pbl_safe'
+    call flush(0)
+    deallocate(lh_pbl_safe)
+ endif
+
+ if (allocated(lh_pbl_safe)) then
+    write(0,*) 'CLEAN RESTART PBL: deallocating lh_pbl_safe'
+    call flush(0)
+    deallocate(lh_pbl_safe)
+ endif
+
+
 
  end subroutine driver_pbl
 
