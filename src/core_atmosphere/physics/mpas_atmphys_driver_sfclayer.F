@@ -1690,19 +1690,27 @@ subroutine driver_gfs_nsst_from_sfclayer(configs, mesh, diag_physics, sfc_input,
    type(mpas_pool_type), intent(in) :: configs, mesh, diag_physics, sfc_input
    integer, intent(in) :: its, ite, jts
    integer :: im_nst, i, ii, nthreads_nst, errflg_nst
+   real(kind=RKIND) :: tgice_scalar_nst
    character(len=256) :: errmsg_nst
    logical :: cplflx_nst
    logical, allocatable :: wet_nst(:)
    real(kind=RKIND), allocatable :: tgice_nst(:), tsfco_nst(:), tsurf_wat_nst(:), tseal_nst(:)
    real(kind=RKIND), allocatable :: xt_nst(:), xz_nst(:), dt_cool_nst(:), z_c_nst(:), tref_nst(:)
    real(kind=RKIND), allocatable :: oceanfrac_nst(:), hfx_nst(:), qfx_nst(:), lh_nst(:)
+   real(kind=RKIND), allocatable :: ps_nst(:), t1_nst(:), q1_nst(:)
+   real(kind=RKIND), allocatable :: wind_nst(:), cm_nst(:), ch_nst(:)
+   real(kind=RKIND) :: timestep_nst
 
    im_nst = ite - its + 1
    nthreads_nst = 1
    cplflx_nst = .false.
+   tgice_scalar_nst = 273.15_RKIND
    allocate(wet_nst(im_nst), tgice_nst(im_nst), tsfco_nst(im_nst), tsurf_wat_nst(im_nst), tseal_nst(im_nst))
    allocate(xt_nst(im_nst), xz_nst(im_nst), dt_cool_nst(im_nst), z_c_nst(im_nst), tref_nst(im_nst))
    allocate(oceanfrac_nst(im_nst), hfx_nst(im_nst), qfx_nst(im_nst), lh_nst(im_nst))
+   allocate(ps_nst(im_nst), t1_nst(im_nst), q1_nst(im_nst))
+   allocate(wind_nst(im_nst), cm_nst(im_nst), ch_nst(im_nst))
+   timestep_nst = 1.0_RKIND
 
    do i = its, ite
       ii = i - its + 1
@@ -1715,12 +1723,20 @@ subroutine driver_gfs_nsst_from_sfclayer(configs, mesh, diag_physics, sfc_input,
       tref_nst(ii)=tsk_p(i,jts)
       oceanfrac_nst(ii) = merge(1.0_RKIND, 0.0_RKIND, wet_nst(ii))
       hfx_nst(ii)=hfx_p(i,jts); qfx_nst(ii)=qfx_p(i,jts); lh_nst(ii)=lh_p(i,jts)
+      ps_nst(ii)=psfc_p(i,jts)
+      t1_nst(ii)=t_p(i,kts,jts)
+      q1_nst(ii)=qv_p(i,kts,jts)
+      wind_nst(ii)=max(wspd_p(i,jts),1.0_RKIND)
+      cm_nst(ii)=max(cd_p(i,jts),1.0e-6_RKIND)
+      ch_nst(ii)=max(ck_p(i,jts),1.0e-6_RKIND)
    enddo
 
-   call mpas_nst_pre(im_nst, wet_nst, tgice_nst, tsfco_nst, tsurf_wat_nst, tseal_nst, &
+   call mpas_nst_pre(im_nst, wet_nst, tgice_scalar_nst, tsfco_nst, tsurf_wat_nst, tseal_nst, &
                      xt_nst, xz_nst, dt_cool_nst, z_c_nst, tref_nst, cplflx_nst, &
                      oceanfrac_nst, nthreads_nst, errmsg_nst, errflg_nst)
-   call mpas_nst_main(im_nst, hfx_nst, qfx_nst, lh_nst, tsurf_wat_nst, oceanfrac_nst, errmsg_nst, errflg_nst)
+   call mpas_nst_main(im_nst, hfx_nst, qfx_nst, lh_nst, tsurf_wat_nst, oceanfrac_nst, &
+                     ps_nst, t1_nst, q1_nst, wind_nst, cm_nst, ch_nst, timestep_nst, &
+                     errmsg_nst, errflg_nst)
    call mpas_nst_post(im_nst, wet_nst, tsfco_nst, tsurf_wat_nst, tseal_nst, tref_nst, oceanfrac_nst, errmsg_nst, errflg_nst)
 
    do i = its, ite
@@ -1737,6 +1753,7 @@ subroutine driver_gfs_nsst_from_sfclayer(configs, mesh, diag_physics, sfc_input,
    deallocate(wet_nst, tgice_nst, tsfco_nst, tsurf_wat_nst, tseal_nst)
    deallocate(xt_nst, xz_nst, dt_cool_nst, z_c_nst, tref_nst)
    deallocate(oceanfrac_nst, hfx_nst, qfx_nst, lh_nst)
+   deallocate(ps_nst, t1_nst, q1_nst, wind_nst, cm_nst, ch_nst)
 end subroutine driver_gfs_nsst_from_sfclayer
  end module mpas_atmphys_driver_sfclayer
 !=================================================================================================================

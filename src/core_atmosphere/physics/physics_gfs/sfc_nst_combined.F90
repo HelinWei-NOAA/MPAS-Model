@@ -900,61 +900,251 @@ end module sfc_nst_post
 !=======================================================================
 
 
+
 module mpas_gfs_nst_wrapper
   use gfs_tke_edmf_machine, only : kind_phys
+  use module_nst_parameters, only : zero, one, half, t0k, cp_w
+  use physcons, only : con_pi, con_cp, con_hvap, con_hfus, &
+       con_rd, con_eps, con_epsm1, con_fvirt, con_g
+  use sfc_nst_pre,  only : sfc_nst_pre_run
+  use sfc_nst,      only : sfc_nst_run
+  use sfc_nst_post, only : sfc_nst_post_run
   implicit none
+
+  real(kind=kind_phys), parameter :: pi      = con_pi
+  real(kind=kind_phys), parameter :: cp_a    = con_cp
+  real(kind=kind_phys), parameter :: hvap    = con_hvap
+  real(kind=kind_phys), parameter :: hfus    = con_hfus
+  real(kind=kind_phys), parameter :: rd      = con_rd
+  real(kind=kind_phys), parameter :: eps     = con_eps
+  real(kind=kind_phys), parameter :: epsm1   = con_epsm1
+  real(kind=kind_phys), parameter :: rvrdm1  = con_fvirt
+  real(kind=kind_phys), parameter :: grav    = con_g
+  real(kind=kind_phys), parameter :: sigma_r = 5.6704e-8_kind_phys
+
 contains
-  subroutine mpas_nst_pre(im, wet, tgice, tsfco, tsurf_wat, tseal, xt, xz, dt_cool, z_c, tref, cplflx, oceanfrac, nthreads, errmsg, errflg)
+
+  subroutine mpas_nst_pre(im, wet, tgice, tsfco, tsurf_wat, tseal, &
+                          xt, xz, dt_cool, z_c, tref, cplflx,     &
+                          oceanfrac, nthreads, errmsg, errflg)
     integer, intent(in) :: im, nthreads
     logical, intent(in) :: wet(im), cplflx
-    real(kind=kind_phys), intent(in) :: tgice(im), oceanfrac(im)
-    real(kind=kind_phys), intent(inout) :: tsfco(im), tsurf_wat(im), tseal(im), xt(im), xz(im), dt_cool(im), z_c(im)
-    real(kind=kind_phys), intent(out) :: tref(im)
+    real(kind=kind_phys), intent(in) :: tgice, oceanfrac(im)
+    real(kind=kind_phys), intent(in) :: tsfco(im), xt(im), xz(im), dt_cool(im), z_c(im)
+    real(kind=kind_phys), intent(inout) :: tsurf_wat(im), tseal(im), tref(im)
     character(len=*), intent(out) :: errmsg
     integer, intent(out) :: errflg
-    integer :: i
-    errmsg = ''; errflg = 0
-    do i=1,im
-       if (wet(i) .and. oceanfrac(i) > 0.0_kind_phys) then
-          tsurf_wat(i)=max(tsurf_wat(i),tgice(i)); tseal(i)=tsurf_wat(i); tref(i)=tsurf_wat(i)
-          xt(i)=0.0_kind_phys; xz(i)=0.0_kind_phys; dt_cool(i)=0.0_kind_phys; z_c(i)=0.0_kind_phys
-       else
-          tref(i)=tsfco(i)
-       endif
-    enddo
+
+    call sfc_nst_pre_run(im, wet, tgice, tsfco, tsurf_wat, tseal, &
+                         xt, xz, dt_cool, z_c, tref, cplflx,     &
+                         oceanfrac, nthreads, errmsg, errflg)
   end subroutine mpas_nst_pre
 
-  subroutine mpas_nst_main(im, hfx, qfx, lh, tsurf_wat, oceanfrac, errmsg, errflg)
+
+  subroutine mpas_nst_main(im, hfx, qfx, lh, tsurf_wat, oceanfrac, &
+                           ps_in, t1_in, q1_in, wind_in, cm_in, ch_in, &
+                           timestep_in, errmsg, errflg)
+
     integer, intent(in) :: im
     real(kind=kind_phys), intent(inout) :: hfx(im), qfx(im), lh(im), tsurf_wat(im)
     real(kind=kind_phys), intent(in) :: oceanfrac(im)
+    real(kind=kind_phys), intent(in) :: ps_in(im), t1_in(im), q1_in(im)
+    real(kind=kind_phys), intent(in) :: wind_in(im), cm_in(im), ch_in(im)
+    real(kind=kind_phys), intent(in) :: timestep_in
     character(len=*), intent(out) :: errmsg
     integer, intent(out) :: errflg
+
     integer :: i
-    real(kind=kind_phys), parameter :: xlv_local=2.5e6_kind_phys
-    errmsg=''; errflg=0
-    do i=1,im
-       if (oceanfrac(i) > 0.0_kind_phys) then
-          if (qfx(i) /= qfx(i)) qfx(i)=0.0_kind_phys
-          if (hfx(i) /= hfx(i)) hfx(i)=0.0_kind_phys
-          lh(i)=xlv_local*qfx(i)
-       endif
+    integer :: kdt, ipr, nstf_name1, nstf_name4, nstf_name5
+    real(kind=kind_phys) :: jcal, rhw0, tgice, solhr, timestep
+    logical :: use_oceanuv, lseaspray, lprnt, thsfc_loc
+
+    real(kind=kind_phys), allocatable :: ps(:), u1(:), v1(:), usfco(:), vsfco(:)
+    real(kind=kind_phys), allocatable :: t1(:), q1(:), tref(:), cm(:), ch(:)
+    real(kind=kind_phys), allocatable :: fm(:), fm10(:), prsl1(:), prslki(:)
+    real(kind=kind_phys), allocatable :: prsik1(:), prslk1(:), xlon(:), xcosz(:)
+    real(kind=kind_phys), allocatable :: sinlat(:), stress(:), sfcemis(:)
+    real(kind=kind_phys), allocatable :: dlwflx(:), sfcnsw(:), rain(:), wind(:)
+    real(kind=kind_phys), allocatable :: tskin(:), tsurf(:), xt(:), xs(:), xu(:), xv(:)
+    real(kind=kind_phys), allocatable :: xz(:), zm(:), xtts(:), xzts(:), dt_cool(:)
+    real(kind=kind_phys), allocatable :: z_c(:), c_0(:), c_d(:), w_0(:), w_d(:)
+    real(kind=kind_phys), allocatable :: d_conv(:), ifd(:), qrain(:)
+    real(kind=kind_phys), allocatable :: qsurf(:), gflux(:), cmm(:), chh(:), evap(:)
+    real(kind=kind_phys), allocatable :: hflx(:), ep(:)
+    logical, allocatable :: wet(:), flag_iter(:), flag_guess(:)
+    integer, allocatable :: use_lake_model(:)
+
+    allocate(ps(im), u1(im), v1(im), usfco(im), vsfco(im))
+    allocate(t1(im), q1(im), tref(im), cm(im), ch(im))
+    allocate(fm(im), fm10(im), prsl1(im), prslki(im), prsik1(im), prslk1(im))
+    allocate(xlon(im), xcosz(im), sinlat(im), stress(im), sfcemis(im))
+    allocate(dlwflx(im), sfcnsw(im), rain(im), wind(im))
+    allocate(tskin(im), tsurf(im), xt(im), xs(im), xu(im), xv(im), xz(im), zm(im))
+    allocate(xtts(im), xzts(im), dt_cool(im), z_c(im), c_0(im), c_d(im), w_0(im), w_d(im))
+    allocate(d_conv(im), ifd(im), qrain(im), qsurf(im), gflux(im), cmm(im), chh(im), evap(im))
+    allocate(hflx(im), ep(im), wet(im), flag_iter(im), flag_guess(im), use_lake_model(im))
+
+    kdt = 1
+    ipr = 1
+    nstf_name1 = 1
+    nstf_name4 = 30
+    nstf_name5 = 10
+    jcal = one
+    rhw0 = one
+    tgice = t0k
+    solhr = zero
+    timestep = max(timestep_in, one)
+    use_oceanuv = .false.
+    lseaspray = .false.
+    lprnt = .false.
+    thsfc_loc = .false.
+
+    do i = 1, im
+       wet(i) = oceanfrac(i) > zero
+       flag_iter(i) = wet(i)
+       flag_guess(i) = .false.
+       use_lake_model(i) = 0
+
+       ps(i) = max(ps_in(i), 10000.0_kind_phys)
+       t1(i) = max(t1_in(i), 180.0_kind_phys)
+       q1(i) = max(q1_in(i), zero)
+       tref(i) = tsurf_wat(i)
+
+       wind(i) = max(wind_in(i), one)
+       u1(i) = wind(i)
+       v1(i) = zero
+       usfco(i) = zero
+       vsfco(i) = zero
+
+       cm(i) = max(cm_in(i), 1.0e-6_kind_phys)
+       ch(i) = max(ch_in(i), 1.0e-6_kind_phys)
+       fm(i) = one
+       fm10(i) = one
+
+       prsl1(i) = ps(i)
+       prslki(i) = one
+       prsik1(i) = one
+       prslk1(i) = one
+       xlon(i) = zero
+       sinlat(i) = zero
+       xcosz(i) = zero
+
+       stress(i) = max(cm(i)*wind(i)*wind(i), zero)
+       sfcemis(i) = one
+       dlwflx(i) = zero
+       sfcnsw(i) = zero
+       rain(i) = zero
+
+       tskin(i) = tsurf_wat(i)
+       tsurf(i) = tsurf_wat(i)
+       xt(i) = zero
+       xs(i) = zero
+       xu(i) = zero
+       xv(i) = zero
+       xz(i) = zero
+       zm(i) = zero
+       xtts(i) = zero
+       xzts(i) = zero
+       dt_cool(i) = zero
+       z_c(i) = zero
+       c_0(i) = zero
+       c_d(i) = zero
+       w_0(i) = zero
+       w_d(i) = zero
+       d_conv(i) = zero
+       ifd(i) = zero
+       qrain(i) = zero
+       qsurf(i) = q1(i)
+       gflux(i) = zero
+       cmm(i) = cm(i)
+       chh(i) = ch(i)
+       evap(i) = qfx(i)
+       hflx(i) = hfx(i)
+       ep(i) = lh(i)
     enddo
+
+    call sfc_nst_run(im, hvap, cp_a, hfus, jcal, eps, epsm1, rvrdm1, rd, rhw0, &
+                     pi, tgice, sigma_r, ps, u1, v1, usfco, vsfco, use_oceanuv, &
+                     t1, q1, tref, cm, ch, lseaspray, fm, fm10, prsl1, prslki, &
+                     prsik1, prslk1, wet, use_lake_model, xlon, sinlat, stress, &
+                     sfcemis, dlwflx, sfcnsw, rain, timestep, kdt, solhr, xcosz, &
+                     wind, flag_iter, flag_guess, nstf_name1, nstf_name4,       &
+                     nstf_name5, lprnt, ipr, thsfc_loc, tskin, tsurf, xt, xs, xu, &
+                     xv, xz, zm, xtts, xzts, dt_cool, z_c, c_0, c_d, w_0, w_d,  &
+                     d_conv, ifd, qrain, qsurf, gflux, cmm, chh, evap, hflx, ep, &
+                     errmsg, errflg)
+
+    do i = 1, im
+       hfx(i) = hflx(i)
+       qfx(i) = evap(i)
+       lh(i)  = ep(i)
+       tsurf_wat(i) = tskin(i)
+    enddo
+
+    deallocate(ps, u1, v1, usfco, vsfco, t1, q1, tref, cm, ch)
+    deallocate(fm, fm10, prsl1, prslki, prsik1, prslk1, xlon, xcosz)
+    deallocate(sinlat, stress, sfcemis, dlwflx, sfcnsw, rain, wind)
+    deallocate(tskin, tsurf, xt, xs, xu, xv, xz, zm, xtts, xzts, dt_cool)
+    deallocate(z_c, c_0, c_d, w_0, w_d, d_conv, ifd, qrain, qsurf, gflux)
+    deallocate(cmm, chh, evap, hflx, ep, wet, flag_iter, flag_guess, use_lake_model)
+
   end subroutine mpas_nst_main
 
-  subroutine mpas_nst_post(im, wet, tsfco, tsurf_wat, tseal, tref, oceanfrac, errmsg, errflg)
+
+  subroutine mpas_nst_post(im, wet, tsfco, tsurf_wat, tseal, tref, oceanfrac, &
+                           errmsg, errflg)
     integer, intent(in) :: im
     logical, intent(in) :: wet(im)
     real(kind=kind_phys), intent(inout) :: tsfco(im), tsurf_wat(im), tseal(im)
     real(kind=kind_phys), intent(in) :: tref(im), oceanfrac(im)
     character(len=*), intent(out) :: errmsg
     integer, intent(out) :: errflg
+
+    integer :: kdt, nthreads, nstf_name1, nstf_name4, nstf_name5
     integer :: i
-    errmsg=''; errflg=0
-    do i=1,im
-       if (wet(i) .and. oceanfrac(i) > 0.0_kind_phys) then
-          tsfco(i)=tsurf_wat(i); tseal(i)=tsurf_wat(i)
-       endif
+    real(kind=kind_phys) :: rlapse, tgice
+    real(kind=kind_phys), allocatable :: oro(:), oro_uf(:), xt(:), xz(:), dt_cool(:)
+    real(kind=kind_phys), allocatable :: z_c(:), xlon(:), tsfc_wat(:), dtzm(:)
+    logical, allocatable :: icy(:)
+    integer, allocatable :: use_lake_model(:)
+
+    allocate(oro(im), oro_uf(im), xt(im), xz(im), dt_cool(im), z_c(im), xlon(im))
+    allocate(tsfc_wat(im), dtzm(im), icy(im), use_lake_model(im))
+
+    kdt = 1
+    nthreads = 1
+    nstf_name1 = 1
+    nstf_name4 = 30
+    nstf_name5 = 10
+    rlapse = 0.0065_kind_phys
+    tgice = t0k
+
+    do i = 1, im
+       icy(i) = .false.
+       use_lake_model(i) = 0
+       oro(i) = zero
+       oro_uf(i) = zero
+       xt(i) = zero
+       xz(i) = zero
+       dt_cool(i) = zero
+       z_c(i) = zero
+       xlon(i) = zero
+       tsfc_wat(i) = tsurf_wat(i)
+       dtzm(i) = zero
     enddo
+
+    call sfc_nst_post_run(im, kdt, rlapse, tgice, wet, use_lake_model, icy, &
+                          oro, oro_uf, nstf_name1, nstf_name4, nstf_name5, &
+                          xt, xz, dt_cool, z_c, tref, xlon, tsurf_wat,    &
+                          tsfc_wat, nthreads, dtzm, errmsg, errflg)
+
+    do i = 1, im
+       tsfco(i) = tsfc_wat(i)
+    enddo
+
+    deallocate(oro, oro_uf, xt, xz, dt_cool, z_c, xlon, tsfc_wat, dtzm)
+    deallocate(icy, use_lake_model)
+
   end subroutine mpas_nst_post
+
 end module mpas_gfs_nst_wrapper
