@@ -556,8 +556,6 @@
 !-----------------------------------------------------------------------------------------------------------------
 
 
- write(0,*) 'ENTER pbl_from_MPAS STEP DEBUG: its/ite/jts=', its, ite, jts
- call flush(0)
 
  call mpas_pool_get_config(configs,'config_pbl_scheme',pbl_scheme)
 
@@ -990,8 +988,6 @@
  enddo
  enddo
 
- write(0,*) 'EXIT pbl_from_MPAS STEP DEBUG'
- call flush(0)
 
 
  end subroutine pbl_from_MPAS
@@ -1508,8 +1504,6 @@
 
  real(kind=RKIND), allocatable :: lh_pbl_safe(:,:)
  integer :: i_lh_safe, j_lh_safe
- write(0,*) 'ENTER driver_pbl TOP DEBUG: its/ite/jts=', its, ite, jts
- call flush(0)
 
  errmsg = ' '
  errflg = 0
@@ -1521,8 +1515,6 @@
  call mpas_pool_get_config(configs,'config_pbl_scheme'  ,pbl_scheme         )
 
 !copy MPAS arrays to local arrays:
- write(0,*) 'PBL DEBUG before pbl_from_MPAS: its/ite/jts=', its, ite, jts
- call flush(0)
  call pbl_from_MPAS(configs,state,mesh,sfc_input,diag_physics,tend_physics,its,ite)
 
        ! CLEAN RESTART: do not read lh_p in PBL for gfs_sfcl path.
@@ -1533,10 +1525,6 @@
              lh_pbl_safe(i_lh_safe,j_lh_safe) = xlv * qfx_p(i_lh_safe,j_lh_safe)
           enddo
        enddo
-       write(0,*) 'CLEAN RESTART PBL: computed LH from qfx_p=', &
-                  minval(lh_pbl_safe(its:ite,jts:jte)), &
-                  maxval(lh_pbl_safe(its:ite,jts:jte))
-       call flush(0)
 
 
        ! ---------------------------------------------------------------
@@ -1551,14 +1539,8 @@
           enddo
        enddo
 
-       write(0,*) 'FINAL TEST: computed lh_pbl_safe from qfx_p: ', &
-                  minval(lh_pbl_safe(its:ite,jts:jte)), &
-                  maxval(lh_pbl_safe(its:ite,jts:jte))
-       call flush(0)
 
 
- write(0,*) 'PBL DEBUG after pbl_from_MPAS returned successfully'
- call flush(0)
 
 
 
@@ -1656,7 +1638,6 @@ initflag = 1
                   ' xice=', minval(xice_p(its:ite,jts)), maxval(xice_p(its:ite,jts)), &
                   ' tsk=', minval(tsk_p(its:ite,jts)), maxval(tsk_p(its:ite,jts)), &
                   ' znt=', minval(znt_p(its:ite,jts)), maxval(znt_p(its:ite,jts))
-       call flush(0)
 
        where (hfx_p(its:ite,jts) /= hfx_p(its:ite,jts) .or. &
               abs(hfx_p(its:ite,jts)) > 2000.0_RKIND)
@@ -1676,7 +1657,6 @@ initflag = 1
        write(0,*) 'PBL COPY-PATH AFTER SANITIZE: hfx=', &
                   minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
                   ' qfx=', minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts))
-       call flush(0)
 
        ! ------------------------------------------------------------------
        ! PBL-side surface flux receive/sanitize check.
@@ -1699,7 +1679,6 @@ initflag = 1
        write(0,*) 'PBL RECEIVE flux counts: bad_hfx=', n_bad_hfx_pbl, &
                   ' bad_qfx=', n_bad_qfx_pbl, ' bad_lh=', n_bad_lh_pbl, &
                   ' zero_hfxqfx=', n_zero_hfxqfx_pbl, ' of ', (ite-its+1)
-       call flush(0)
 
        where (hfx_p(its:ite,jts) /= hfx_p(its:ite,jts) .or. &
               abs(hfx_p(its:ite,jts)) > 2000.0_RKIND)
@@ -1719,7 +1698,6 @@ initflag = 1
        write(0,*) 'PBL RECEIVE flux after sanitize: hfx=', &
                   minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
                   ' qfx=', minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts))
-       call flush(0)
 
 
        ! ------------------------------------------------------------------
@@ -1772,7 +1750,6 @@ initflag = 1
           write(0,*) 'PBL SUPPLEMENTAL FLUX computed for TKE-EDMF: hfx=', &
                      minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
                      ' qfx=', minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts))
-          call flush(0)
        endif
 
        ! Diagnose why hfx/qfx are zero and TKE is at the floor before staging TKE-EDMF inputs.
@@ -1788,19 +1765,6 @@ initflag = 1
 
        if (n_zero_hfxqfx_tkeedmf > 0 .or. n_bad_hfxqfx_tkeedmf > 0 .or. &
            n_tke_floor_tkeedmf > 0 .or. n_bad_tke_tkeedmf > 0) then
-          write(0,*) 'PBL DEBUG pre-stage: strip=', its, ite, jts, &
-                     ' zero_hfxqfx=', n_zero_hfxqfx_tkeedmf, ' of ', (ite-its+1), &
-                     ' bad_flux_count=', n_bad_hfxqfx_tkeedmf
-          write(0,*) 'PBL DEBUG pre-stage flux ranges: hfx=', minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
-                     ' qfx=', minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts)), &
-                     ' ust=', minval(ust_p(its:ite,jts)), maxval(ust_p(its:ite,jts))
-          write(0,*) 'PBL DEBUG pre-stage surface: xland=', minval(xland_p(its:ite,jts)), maxval(xland_p(its:ite,jts)), &
-                     ' tsk=', minval(tsk_p(its:ite,jts)), maxval(tsk_p(its:ite,jts)), &
-                     ' znt=', minval(znt_p(its:ite,jts)), maxval(znt_p(its:ite,jts))
-          write(0,*) 'PBL DEBUG pre-stage TKE: floor_count=', n_tke_floor_tkeedmf, ' of ', &
-                     (ite-its+1)*(kte-kts+1), ' bad_tke_count=', n_bad_tke_tkeedmf, &
-                     ' tke=', minval(tkepbl_p(its:ite,kts:kte,jts)), maxval(tkepbl_p(its:ite,kts:kte,jts))
-          call flush(0)
        endif
 
 
@@ -1809,8 +1773,6 @@ initflag = 1
        ! proper prognostic TKE initialization/update path.
        if (maxval(tkepbl_p(its:ite,kts:kte,jts)) <= 1.01e-9_RKIND) then
           tkepbl_p(its:ite,kts:kte,jts) = 1.0e-6_RKIND
-          write(0,*) 'PBL DEBUG: tkepbl_p was at floor; seeded to 1e-6 for TKE-EDMF debug.'
-          call flush(0)
        endif
 
        if (.not. allocated(coszen_tkeedmf_p)) then
@@ -1874,15 +1836,6 @@ initflag = 1
        if (maxval(abs(hfx_p(its:ite,jts))) <= 1.0e-20_RKIND .or. &
            maxval(abs(qfx_tkeedmf_safe_p)) <= 1.0e-20_RKIND .or. &
            maxval(tkepbl_p(its:ite,kts:kte,jts)) <= 1.01e-9_RKIND) then
-          write(0,*) 'PBL DEBUG post-stage: hfx=', minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
-                     ' qfx_safe=', minval(qfx_tkeedmf_safe_p), maxval(qfx_tkeedmf_safe_p), &
-                     ' lh_diag=', minval(lh_tkeedmf_p(its:ite,jts)), maxval(lh_tkeedmf_p(its:ite,jts))
-          write(0,*) 'PBL DEBUG post-stage stress/zmid: stress=', minval(stress_tkeedmf_p(its:ite,jts)), &
-                     maxval(stress_tkeedmf_p(its:ite,jts)), &
-                     ' zmid_low=', minval(zmid_tkeedmf_p(its:ite,kts,jts)), maxval(zmid_tkeedmf_p(its:ite,kts,jts))
-          write(0,*) 'PBL DEBUG interpretation: if hfx/qfx are zero here, check pbl_from_MPAS or surface/LSM order; ', &
-                     'if TKE floor_count is large, TKE is not being initialized/advanced before this call.'
-          call flush(0)
        endif
 
        ! Prepare and diagnose surface-layer inputs passed to TKE-EDMF.
@@ -1908,12 +1861,10 @@ initflag = 1
                   ' qfx_safe=', minval(qfx_tkeedmf_safe_p), maxval(qfx_tkeedmf_safe_p), &
                   ' lh_diag=', minval(lh_tkeedmf_p(its:ite,jts)), maxval(lh_tkeedmf_p(its:ite,jts)), &
                   ' stress=', minval(stress_tkeedmf_safe_p), maxval(stress_tkeedmf_safe_p)
-       call flush(0)
 
        if (maxval(abs(hfx_p(its:ite,jts))) == 0.0_RKIND .and. &
            maxval(abs(qfx_tkeedmf_safe_p)) == 0.0_RKIND) then
           write(0,*) 'WARNING: TKE-EDMF called with zero hfx and zero qfx for this strip.'
-          call flush(0)
        endif
 
 
@@ -1921,12 +1872,10 @@ initflag = 1
        write(0,*) 'PBL STAGED FLUX CHECK: hfx=', minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
                   ' qfx_safe=', minval(qfx_tkeedmf_safe_p), maxval(qfx_tkeedmf_safe_p), &
                   ' lh_diag=', minval(lh_tkeedmf_p(its:ite,jts)), maxval(lh_tkeedmf_p(its:ite,jts))
-       call flush(0)
 
        write(0,*) 'PBL UNIT CHECK before wrapper: znt_m=', minval(znt_tkeedmf_pbl), maxval(znt_tkeedmf_pbl), &
                   ' qfx_kgm2s=', minval(qfx_tkeedmf_safe_p), maxval(qfx_tkeedmf_safe_p), &
                   ' hfx_Wm2=', minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts))
-       call flush(0)
 
 
        ! Vertical orientation check:
@@ -1941,12 +1890,10 @@ initflag = 1
        write(0,*) 'VERT CHECK before TKE-EDMF: t_kts=', &
                   minval(t_p(its:ite,kts,jts)), maxval(t_p(its:ite,kts,jts)), &
                   ' t_kte=', minval(t_p(its:ite,kte,jts)), maxval(t_p(its:ite,kte,jts))
-       call flush(0)
 
        if (minval(pres_hyd_p(its:ite,kts,jts)) < minval(pres_hyd_p(its:ite,kte,jts))) then
           write(0,*) 'WARNING: vertical index may be top-down for TKE-EDMF call; kts pressure < kte pressure.'
           write(0,*) 'If so, reverse all vertical arrays before calling satmedmfvdifq.'
-          call flush(0)
        endif
 
 
@@ -1992,9 +1939,6 @@ call mpas_call_satmedmfvdifq(                                  &
 
 
        if (maxval(tkepbl_p(its:ite,kts:kte,jts)) <= 1.01e-9_RKIND) then
-          write(0,*) 'PBL DEBUG after wrapper: tkepbl_p remains at floor: ', &
-                     minval(tkepbl_p(its:ite,kts:kte,jts)), maxval(tkepbl_p(its:ite,kts:kte,jts))
-          call flush(0)
        endif
 
        write(0,*) 'PBL after TKE-EDMF: rth=', minval(rthblten_p(its:ite,kts:kte,jts)), &
@@ -2005,7 +1949,6 @@ call mpas_call_satmedmfvdifq(                                  &
                   maxval(rqvblten_p(its:ite,kts:kte,jts)), &
                   ' qc=', minval(rqcblten_p(its:ite,kts:kte,jts)), maxval(rqcblten_p(its:ite,kts:kte,jts)), &
                   ' qi=', minval(rqiblten_p(its:ite,kts:kte,jts)), maxval(rqiblten_p(its:ite,kts:kte,jts))
-       call flush(0)
 
        if (tke_edmf_errflg /= 0) then
           write(*,*) 'FATAL in bl_tke_edmf: ', trim(tke_edmf_errmsg)
@@ -2356,14 +2299,10 @@ call mpas_call_satmedmfvdifq(                                  &
 !call mpas_log_write('--- end subroutine driver_pbl.')
 
  if (allocated(lh_pbl_safe)) then
-    write(0,*) 'FINAL TEST: deallocating lh_pbl_safe'
-    call flush(0)
     deallocate(lh_pbl_safe)
  endif
 
  if (allocated(lh_pbl_safe)) then
-    write(0,*) 'CLEAN RESTART PBL: deallocating lh_pbl_safe'
-    call flush(0)
     deallocate(lh_pbl_safe)
  endif
 

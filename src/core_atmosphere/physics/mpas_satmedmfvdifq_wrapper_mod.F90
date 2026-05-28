@@ -456,12 +456,6 @@ contains
         ten_qi_out(i,k) = min(max(ten_qi_out(i,k), -1.0e-8_RKIND), 1.0e-8_RKIND)
 
         tke_mpas(i,k) = min(max(q1(i,k,ntke), 1.0e-9_RKIND), 10.0_RKIND)
-        ten_t_out(i,k) = 0.0_RKIND
-        ten_u_out(i,k)  = 0.0_RKIND
-        ten_v_out(i,k)  = 0.0_RKIND
-        ten_qv_out(i,k) = 0.0_RKIND
-        ten_qc_out(i,k) = 0.0_RKIND
-        ten_qi_out(i,k) = 0.0_RKIND
 
       enddo
     enddo
