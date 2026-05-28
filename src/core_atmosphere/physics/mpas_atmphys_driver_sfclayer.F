@@ -1911,7 +1911,6 @@ subroutine driver_gfs_nsst_from_sfclayer(configs, mesh, diag_physics, sfc_input,
       endif
    enddo
 
-
    
    ! NST LOCAL NAN GUARD BLOCK
    do ii = 1, im_nst
@@ -1932,7 +1931,6 @@ subroutine driver_gfs_nsst_from_sfclayer(configs, mesh, diag_physics, sfc_input,
       if (oceanfrac_nst(ii) /= oceanfrac_nst(ii)) oceanfrac_nst(ii) = 0.0_RKIND
       oceanfrac_nst(ii) = min(1.0_RKIND, max(0.0_RKIND, oceanfrac_nst(ii)))
    enddo
-
 
    
    ! NST FPE STRICT CLAMP BLOCK
@@ -1976,20 +1974,14 @@ subroutine driver_gfs_nsst_from_sfclayer(configs, mesh, diag_physics, sfc_input,
                      xt_nst, xz_nst, dt_cool_nst, z_c_nst, tref_nst, cplflx_nst, &
                      oceanfrac_nst, nthreads_nst, errmsg_nst, errflg_nst)
 
-
    call mpas_nst_main(im_nst, hfx_nst, qfx_nst, lh_nst, tsurf_wat_nst, oceanfrac_nst, &
                      ps_nst, t1_nst, q1_nst, wind_nst, cm_nst, ch_nst, timestep_nst, &
                      errmsg_nst, errflg_nst)
 
    
-   ! NST OUTPUT SANITIZE BLOCK
-   do ii = 1, im_nst
-      if (.not. ieee_is_finite(hfx_nst(ii))) hfx_nst(ii) = 0.0_RKIND
-      if (.not. ieee_is_finite(qfx_nst(ii))) qfx_nst(ii) = 0.0_RKIND
-      if (.not. ieee_is_finite(lh_nst(ii)))  lh_nst(ii)  = 2.5e6_RKIND * qfx_nst(ii)
-      if (.not. ieee_is_finite(tsurf_wat_nst(ii))) tsurf_wat_nst(ii) = tsfco_nst(ii)
-      lh_nst(ii) = 2.5e6_RKIND * qfx_nst(ii)
-   enddo
+   ! Do not sanitize or overwrite NST output here.
+   ! For wet/ocean points, pass the fluxes returned by NSST directly
+   ! back to MPAS/PBL below. This preserves the NSST-computed hfx/qfx/lh.
 
    call mpas_nst_post(im_nst, wet_nst, tsfco_nst, tsurf_wat_nst, tseal_nst, tref_nst, oceanfrac_nst, errmsg_nst, errflg_nst)
 
@@ -2000,16 +1992,13 @@ subroutine driver_gfs_nsst_from_sfclayer(configs, mesh, diag_physics, sfc_input,
       if (wet_nst(ii)) then
          ! Only wet/ocean points receive NSST-updated fluxes and skin temperature.
          ! Land points keep the GFS sfc_diff reconstructed hfx/qfx/lh/t2m values.
-         lh_nst(ii) = hvap_nst_local * qfx_nst(ii)
          hfx_p(i,jts) = hfx_nst(ii)
          qfx_p(i,jts) = qfx_nst(ii)
          if (allocated(lh_p)) lh_p(i,jts) = lh_nst(ii)
          tsk_p(i,jts) = tsfco_nst(ii)
       endif
    enddo
-
    
-
    deallocate(wet_nst, tgice_nst, tsfco_nst, tsurf_wat_nst, tseal_nst)
    deallocate(xt_nst, xz_nst, dt_cool_nst, z_c_nst, tref_nst)
    deallocate(oceanfrac_nst, hfx_nst, qfx_nst, lh_nst)
