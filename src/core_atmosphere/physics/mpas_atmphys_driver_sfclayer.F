@@ -1140,6 +1140,7 @@ real(kind=RKIND),dimension(:),pointer:: cd,cda,ck,cka
  character(len=StrKIND):: errmsg
  integer:: errflg
 
+
 !-----------------------------------------------------------------------------------------------------------------
 
 !initialization of CCPP-compliant flags:
@@ -1250,6 +1251,20 @@ real(kind=RKIND),dimension(:),pointer:: cd,cda,ck,cka
 !CCPP-compliant flags:
  character(len=StrKIND):: errmsg
  integer:: errflg
+
+! Local work arrays for the gfs_sfcl bridge.
+ integer :: im_gfs, ii_gfs, i_gfs
+ integer, allocatable :: vegtype_gfs(:)
+ real(kind=RKIND), allocatable :: area_gfs(:), psfc_gfs(:), t1_gfs(:), q1_gfs(:)
+ real(kind=RKIND), allocatable :: z1_gfs(:), wspd_gfs(:), prsl1_gfs(:), prslki_gfs(:)
+ real(kind=RKIND), allocatable :: prsik1_gfs(:), prslk1_gfs(:), sigmaf_gfs(:)
+ real(kind=RKIND), allocatable :: xland_gfs(:), xice_gfs(:), znt_gfs(:), z0h_gfs(:), tsk_gfs(:)
+ real(kind=RKIND), allocatable :: u10_gfs(:), v10_gfs(:), fm_gfs(:), fh_gfs(:), cm_gfs(:), ch_gfs(:)
+ real(kind=RKIND), allocatable :: stress_gfs(:), rb_gfs(:), shdmax_gfs(:)
+ real(kind=RKIND) :: tv_gfs, rho_gfs, es_gfs, qsat_gfs, qsurf_gfs, wind_gfs, fac2_gfs
+ real(kind=RKIND), parameter :: eps_gfs = 0.622_RKIND
+ real(kind=RKIND), parameter :: epsm1_gfs = eps_gfs - 1.0_RKIND
+ real(kind=RKIND), parameter :: hvap_gfs = 2.5e6_RKIND
 
 !-----------------------------------------------------------------------------------------------------------------
 !call mpas_log_write('')
@@ -1603,38 +1618,125 @@ real(kind=RKIND),dimension(:),pointer:: cd,cda,ck,cka
 
     case("gfs_sfcl")
        ! ---------------------------------------------------------------
-       ! GFS_SFCL bridge: use the current model/LSM-provided values.
+       ! Real GFS surface-layer bridge for MPAS.
        !
-       ! Do NOT hard-code cd, znt, ust, flhc/flqc, qgh/qsfc, chs, or 2-m
-       ! diagnostics here.  Those artificial values contaminate t2m, hfx,
-       ! and qfx.  sfclayer_from_MPAS() has already copied the valid
-       ! MPAS/LSM/previous-physics fields into *_p arrays.  This branch
-       ! only protects LH consistency and calls the optional NSST bridge.
+       ! Previous test code preserved stale MPAS diagnostics and still called
+       ! the NSST hook, which can drive land hfx/qfx to zero.  This branch now
+       ! calls the GFS sfc_diff wrapper using the actual MPAS model state and
+       ! then reconstructs diagnostic hfx, qfx, lh, t2m/q2/u10/v10 from the
+       ! returned exchange coefficients.
        ! ---------------------------------------------------------------
 
-       ! Keep LH consistent with the moisture flux only when qfx is valid.
-       ! Do not force hfx/qfx themselves in this surface-layer bridge.
-       if (allocated(lh_p)) then
-          where (abs(qfx_p(its:ite,jts)) > 1.0e-20_RKIND)
-             lh_p(its:ite,jts) = 2.5e6_RKIND * qfx_p(its:ite,jts)
-          end where
+       im_gfs = ite - its + 1
+       allocate(area_gfs(im_gfs), psfc_gfs(im_gfs), t1_gfs(im_gfs), q1_gfs(im_gfs), z1_gfs(im_gfs), wspd_gfs(im_gfs))
+       allocate(prsl1_gfs(im_gfs), prslki_gfs(im_gfs), prsik1_gfs(im_gfs), prslk1_gfs(im_gfs), sigmaf_gfs(im_gfs))
+       allocate(xland_gfs(im_gfs), xice_gfs(im_gfs), znt_gfs(im_gfs), z0h_gfs(im_gfs), tsk_gfs(im_gfs))
+       allocate(u10_gfs(im_gfs), v10_gfs(im_gfs), fm_gfs(im_gfs), fh_gfs(im_gfs), cm_gfs(im_gfs), ch_gfs(im_gfs))
+       allocate(stress_gfs(im_gfs), rb_gfs(im_gfs), shdmax_gfs(im_gfs), vegtype_gfs(im_gfs))
+
+       do i_gfs = its, ite
+          ii_gfs = i_gfs - its + 1
+          area_gfs(ii_gfs)  = areaCell(i_gfs)
+          psfc_gfs(ii_gfs)  = max(psfc_p(i_gfs,jts), 10000.0_RKIND)
+          t1_gfs(ii_gfs)    = t_p(i_gfs,kts,jts)
+          q1_gfs(ii_gfs)    = max(qv_p(i_gfs,kts,jts), 1.0e-10_RKIND)
+          z1_gfs(ii_gfs)    = max(0.5_RKIND*dz_p(i_gfs,kts,jts), 2.0_RKIND)
+          wspd_gfs(ii_gfs)  = max(wspd_p(i_gfs,jts), 0.1_RKIND)
+
+          prsl1_gfs(ii_gfs) = max(pres_hyd_p(i_gfs,kts,jts), 10000.0_RKIND)
+          prslki_gfs(ii_gfs)= (prsl1_gfs(ii_gfs)/P0)**rcp
+          prsik1_gfs(ii_gfs)= (psfc_gfs(ii_gfs)/P0)**rcp
+          prslk1_gfs(ii_gfs)= prslki_gfs(ii_gfs)
+          sigmaf_gfs(ii_gfs)= min(1.0_RKIND, max(0.0_RKIND, vegfra_p(i_gfs,jts)/100.0_RKIND))
+
+          vegtype_gfs(ii_gfs) = ivgtyp_gfs_sfcl(i_gfs)
+          shdmax_gfs(ii_gfs)  = min(1.0_RKIND, max(0.0_RKIND, shdmax_p(i_gfs,jts)/100.0_RKIND))
+          xland_gfs(ii_gfs)   = xland_p(i_gfs,jts)
+          xice_gfs(ii_gfs)    = xice_p(i_gfs,jts)
+          znt_gfs(ii_gfs)     = max(znt_p(i_gfs,jts), 1.0e-4_RKIND)
+          z0h_gfs(ii_gfs)     = max(znt_p(i_gfs,jts), 1.0e-4_RKIND)
+          tsk_gfs(ii_gfs)     = tsk_p(i_gfs,jts)
+          u10_gfs(ii_gfs)     = u10_p(i_gfs,jts)
+          v10_gfs(ii_gfs)     = v10_p(i_gfs,jts)
+          fm_gfs(ii_gfs)      = max(fm_p(i_gfs,jts), 1.0e-6_RKIND)
+          fh_gfs(ii_gfs)      = max(fh_p(i_gfs,jts), 1.0e-6_RKIND)
+          cm_gfs(ii_gfs)      = max(cd_p(i_gfs,jts), 1.0e-8_RKIND)
+          ch_gfs(ii_gfs)      = max(ck_p(i_gfs,jts), 1.0e-8_RKIND)
+          stress_gfs(ii_gfs)  = max(ust_p(i_gfs,jts)*ust_p(i_gfs,jts), 1.0e-8_RKIND)
+          rb_gfs(ii_gfs)      = br_p(i_gfs,jts)
+       enddo
+
+       call mpas_call_sfc_diff(im_gfs, kte-kts+1, 1.0_RKIND, area_gfs, &
+                               psfc_gfs, t1_gfs, q1_gfs, z1_gfs, wspd_gfs, &
+                               prsl1_gfs, prslki_gfs, prsik1_gfs, prslk1_gfs, &
+                               sigmaf_gfs, vegtype_gfs, shdmax_gfs, 2, &
+                               xland_gfs, xice_gfs, &
+                               znt_gfs, z0h_gfs, tsk_gfs, u10_gfs, v10_gfs, &
+                               fm_gfs, fh_gfs, cm_gfs, ch_gfs, stress_gfs, rb_gfs, &
+                               errmsg, errflg)
+
+       if (errflg /= 0) then
+          call mpas_log_write('WARNING: GFS sfc_diff returned non-zero errflg in gfs_sfcl; keeping previous fields.')
+       else
+          do i_gfs = its, ite
+             ii_gfs = i_gfs - its + 1
+
+             znt_p(i_gfs,jts) = znt_gfs(ii_gfs)
+             cd_p(i_gfs,jts)  = cm_gfs(ii_gfs)
+             cda_p(i_gfs,jts) = cm_gfs(ii_gfs)
+             ck_p(i_gfs,jts)  = ch_gfs(ii_gfs)
+             cka_p(i_gfs,jts) = ch_gfs(ii_gfs)
+             chs_p(i_gfs,jts) = ch_gfs(ii_gfs)
+             chs2_p(i_gfs,jts)= ch_gfs(ii_gfs)
+             cqs2_p(i_gfs,jts)= ch_gfs(ii_gfs)
+             fm_p(i_gfs,jts)  = fm_gfs(ii_gfs)
+             fh_p(i_gfs,jts)  = fh_gfs(ii_gfs)
+             br_p(i_gfs,jts)  = rb_gfs(ii_gfs)
+             ust_p(i_gfs,jts) = sqrt(max(stress_gfs(ii_gfs), 1.0e-10_RKIND))
+             ustm_p(i_gfs,jts)= ust_p(i_gfs,jts)
+
+             wind_gfs = max(wspd_gfs(ii_gfs), 0.1_RKIND)
+             tv_gfs   = t1_gfs(ii_gfs) * (1.0_RKIND + 0.61_RKIND*q1_gfs(ii_gfs))
+             rho_gfs  = psfc_gfs(ii_gfs) / (R_d * max(tv_gfs, 180.0_RKIND))
+
+             es_gfs = 611.2_RKIND * exp(17.67_RKIND*(tsk_p(i_gfs,jts)-273.15_RKIND) / &
+                                      max(tsk_p(i_gfs,jts)-29.65_RKIND, 1.0_RKIND))
+             es_gfs = min(es_gfs, 0.98_RKIND*psfc_gfs(ii_gfs))
+             qsat_gfs = eps_gfs*es_gfs / (psfc_gfs(ii_gfs) + epsm1_gfs*es_gfs)
+
+             if (qsfc_p(i_gfs,jts) > 1.0e-8_RKIND) then
+                qsurf_gfs = qsfc_p(i_gfs,jts)
+             else
+                qsurf_gfs = qsat_gfs * max(0.05_RKIND, min(1.0_RKIND, mavail_p(i_gfs,jts)))
+                qsfc_p(i_gfs,jts) = qsurf_gfs
+             endif
+             qgh_p(i_gfs,jts) = qsurf_gfs
+
+             flhc_p(i_gfs,jts) = rho_gfs * cp * ch_gfs(ii_gfs) * wind_gfs
+             flqc_p(i_gfs,jts) = rho_gfs *      ch_gfs(ii_gfs) * wind_gfs
+             hfx_p(i_gfs,jts)  = flhc_p(i_gfs,jts) * (tsk_p(i_gfs,jts) - t1_gfs(ii_gfs))
+             qfx_p(i_gfs,jts)  = flqc_p(i_gfs,jts) * (qsurf_gfs - q1_gfs(ii_gfs))
+             lh_p(i_gfs,jts)   = hvap_gfs * qfx_p(i_gfs,jts)
+
+             fac2_gfs = min(1.0_RKIND, max(0.0_RKIND, 2.0_RKIND/max(z1_gfs(ii_gfs),2.0_RKIND)))
+             t2m_p(i_gfs,jts)  = t1_gfs(ii_gfs) + fac2_gfs*(tsk_p(i_gfs,jts)-t1_gfs(ii_gfs))
+             q2_p(i_gfs,jts)   = q1_gfs(ii_gfs) + fac2_gfs*(qsurf_gfs-q1_gfs(ii_gfs))
+             th2m_p(i_gfs,jts) = t2m_p(i_gfs,jts) * (P0/psfc_gfs(ii_gfs))**rcp
+             u10_p(i_gfs,jts)  = u10_gfs(ii_gfs)
+             v10_p(i_gfs,jts)  = v10_gfs(ii_gfs)
+          enddo
        endif
 
-       ! Optional NSST hook.  For CONUS land tests this should not alter land
-       ! fluxes, but keep it here if your build expects the NSST bridge.
+       deallocate(area_gfs, psfc_gfs, t1_gfs, q1_gfs, z1_gfs, wspd_gfs)
+       deallocate(prsl1_gfs, prslki_gfs, prsik1_gfs, prslk1_gfs, sigmaf_gfs)
+       deallocate(xland_gfs, xice_gfs, znt_gfs, z0h_gfs, tsk_gfs)
+       deallocate(u10_gfs, v10_gfs, fm_gfs, fh_gfs, cm_gfs, ch_gfs)
+       deallocate(stress_gfs, rb_gfs, shdmax_gfs, vegtype_gfs)
+
+       ! Apply NSST only for wet/ocean points after GFS sfc_diff.
+       ! This keeps the reconstructed land hfx/qfx/t2m unchanged, while
+       ! allowing NSST to update SST/skin-temperature-related fields over water.
        call driver_gfs_nsst_from_sfclayer(configs, mesh, diag_physics, sfc_input, its, ite, jts)
-
-       ! Re-sync LH after NSST only where NSST/flux path changed qfx.
-       if (allocated(lh_p)) then
-          where (abs(qfx_p(its:ite,jts)) > 1.0e-20_RKIND)
-             lh_p(its:ite,jts) = 2.5e6_RKIND * qfx_p(its:ite,jts)
-          end where
-       endif
-
-       ! No assignment to akms_p/akhs_p in this path.
-
-
-
 
  end select sfclayer_select
 
@@ -1732,11 +1834,7 @@ subroutine driver_gfs_nsst_from_sfclayer(configs, mesh, diag_physics, sfc_input,
    cm_nst(:)        = 1.0e-6_RKIND
    ch_nst(:)        = 1.0e-6_RKIND
 
-if (ite >= 770 .or. myrank_nst == 0) then
-   endif
    timestep_nst = 1.0_RKIND
-   if (ite >= 770 .or. myrank_nst == 0) then
-   endif
 
    if (size(wet_nst) /= im_nst .or. size(tsfco_nst) /= im_nst .or. &
        size(tsurf_wat_nst) /= im_nst .or. size(tseal_nst) /= im_nst .or. &
@@ -1754,7 +1852,8 @@ if (ite >= 770 .or. myrank_nst == 0) then
 
    do i = its, ite
       ii = i - its + 1
-      wet_nst(ii) = (xland_p(i,jts) <= 1.5_RKIND)
+      ! MPAS xland convention here: 1 = land, 2 = water/ocean.
+      wet_nst(ii) = (xland_p(i,jts) >= 1.5_RKIND)
       tgice_nst(ii) = 273.15_RKIND
       tsfco_nst(ii) = tsk_p(i,jts)
       tsurf_wat_nst(ii) = tsk_p(i,jts)
@@ -1812,8 +1911,6 @@ if (ite >= 770 .or. myrank_nst == 0) then
       endif
    enddo
 
-   if (ite >= 770 .or. myrank_nst == 0 .or. nst_bad_count > 0) then
-   endif
 
    
    ! NST LOCAL NAN GUARD BLOCK
@@ -1836,8 +1933,6 @@ if (ite >= 770 .or. myrank_nst == 0) then
       oceanfrac_nst(ii) = min(1.0_RKIND, max(0.0_RKIND, oceanfrac_nst(ii)))
    enddo
 
-   if (ite >= 770 .or. myrank_nst == 0) then
-   endif
 
    
    ! NST FPE STRICT CLAMP BLOCK
@@ -1865,10 +1960,13 @@ if (ite >= 770 .or. myrank_nst == 0) then
    enddo
 
    if (nwet_nst <= 0) then
-      hfx_nst(:) = 0.0_RKIND
-      qfx_nst(:) = 0.0_RKIND
-      lh_nst(:)  = 0.0_RKIND
-      ! no wet points; continue with zero local NST fluxes
+      ! No wet/ocean points on this row: do not call NSST and do not overwrite
+      ! the land fluxes reconstructed by the GFS surface-layer path.
+      deallocate(wet_nst, tgice_nst, tsfco_nst, tsurf_wat_nst, tseal_nst)
+      deallocate(xt_nst, xz_nst, dt_cool_nst, z_c_nst, tref_nst)
+      deallocate(oceanfrac_nst, hfx_nst, qfx_nst, lh_nst)
+      deallocate(ps_nst, t1_nst, q1_nst, wind_nst, cm_nst, ch_nst)
+      return
    endif
 
    ! NST temporarily disable invalid halting under -fpe0 around legacy NSST math
@@ -1877,17 +1975,11 @@ if (ite >= 770 .or. myrank_nst == 0) then
    call mpas_nst_pre(im_nst, wet_nst, tgice_scalar_nst, tsfco_nst, tsurf_wat_nst, tseal_nst, &
                      xt_nst, xz_nst, dt_cool_nst, z_c_nst, tref_nst, cplflx_nst, &
                      oceanfrac_nst, nthreads_nst, errmsg_nst, errflg_nst)
-   if (ite >= 770 .or. myrank_nst == 0) then
-   endif
 
-   if (ite >= 770 .or. myrank_nst == 0) then
-   endif
 
    call mpas_nst_main(im_nst, hfx_nst, qfx_nst, lh_nst, tsurf_wat_nst, oceanfrac_nst, &
                      ps_nst, t1_nst, q1_nst, wind_nst, cm_nst, ch_nst, timestep_nst, &
                      errmsg_nst, errflg_nst)
-   if (ite >= 770 .or. myrank_nst == 0) then
-   endif
 
    
    ! NST OUTPUT SANITIZE BLOCK
@@ -1904,28 +1996,20 @@ if (ite >= 770 .or. myrank_nst == 0) then
 
    do i = its, ite
       ii = i - its + 1
-      ! Force LH consistency here so even if the NST module leaves ep/lh zero,
-      ! PBL still receives LH consistent with QFX.
-      lh_nst(ii) = hvap_nst_local * qfx_nst(ii)
-      hfx_p(i,jts)=hfx_nst(ii); qfx_p(i,jts)=qfx_nst(ii)
-      if (allocated(lh_p)) then
-         if (allocated(lh_p)) then
-         lh_p(i,jts) = lh_nst(ii)
+
+      if (wet_nst(ii)) then
+         ! Only wet/ocean points receive NSST-updated fluxes and skin temperature.
+         ! Land points keep the GFS sfc_diff reconstructed hfx/qfx/lh/t2m values.
+         lh_nst(ii) = hvap_nst_local * qfx_nst(ii)
+         hfx_p(i,jts) = hfx_nst(ii)
+         qfx_p(i,jts) = qfx_nst(ii)
+         if (allocated(lh_p)) lh_p(i,jts) = lh_nst(ii)
+         tsk_p(i,jts) = tsfco_nst(ii)
       endif
-      endif
-      if (wet_nst(ii)) tsk_p(i,jts)=tsfco_nst(ii)
    enddo
 
    
-   if (ite >= 770 .or. myrank_nst == 0) then
-   endif
 
-   if (allocated(lh_p)) then
-   else
-   endif
-   if (allocated(lh_p)) then
-   else
-   endif
    deallocate(wet_nst, tgice_nst, tsfco_nst, tsurf_wat_nst, tseal_nst)
    deallocate(xt_nst, xz_nst, dt_cool_nst, z_c_nst, tref_nst)
    deallocate(oceanfrac_nst, hfx_nst, qfx_nst, lh_nst)
