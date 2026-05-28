@@ -1015,6 +1015,7 @@
  integer,dimension(:),pointer:: kpbl
 
  real(kind=RKIND),dimension(:),pointer  :: hpbl
+real(kind=RKIND),dimension(:),pointer  :: hfx,qfx,lh
  real(kind=RKIND),dimension(:,:),pointer:: kzh,kzm,kzq
  real(kind=RKIND),dimension(:,:),pointer:: rublten,rvblten,rthblten,rqvblten,rqcblten,rqiblten,rqsblten
  real(kind=RKIND),dimension(:,:),pointer:: rncblten,rniblten,rnifablten,rnwfablten
@@ -1103,6 +1104,21 @@
 
     case("bl_tke_edmf")
        call mpas_pool_get_array(diag_physics,'tke_pbl',tke_pbl)
+       call mpas_pool_get_array(diag_physics,'hfx'    ,hfx    )
+       call mpas_pool_get_array(diag_physics,'qfx'    ,qfx    )
+       call mpas_pool_get_array(diag_physics,'lh'     ,lh     )
+
+       ! Keep the surface fluxes visible to diagnostics/history and later physics.
+       ! TKE-EDMF receives hfx_p/qfx_p correctly before the wrapper; without this
+       ! copy-back, diag_physics can still retain stale zero values from an earlier
+       ! path even though the PBL wrapper used nonzero fluxes.
+       do j = jts,jte
+       do i = its,ite
+          hfx(i) = hfx_p(i,j)
+          qfx(i) = qfx_p(i,j)
+          lh(i)  = xlv * qfx_p(i,j)
+       enddo
+       enddo
 
        do j = jts,jte
        do k = kts,kte
