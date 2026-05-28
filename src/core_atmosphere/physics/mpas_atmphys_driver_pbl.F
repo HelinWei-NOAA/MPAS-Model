@@ -1498,6 +1498,8 @@ real(kind=RKIND),dimension(:),pointer  :: hfx,qfx,lh
  real(kind=RKIND), dimension(its:ite) :: vegfra_tkeedmf_pbl
  real(kind=RKIND), dimension(its:ite) :: stress_tkeedmf_safe_p
  real(kind=RKIND), dimension(its:ite) :: qfx_tkeedmf_safe_p
+ real(kind=RKIND), dimension(its:ite) :: hfx_tkeedmf_input_p
+ real(kind=RKIND), dimension(its:ite) :: qfx_tkeedmf_input_p
 
  integer :: n_zero_hfxqfx_tkeedmf
  integer :: n_bad_hfxqfx_tkeedmf
@@ -1913,6 +1915,13 @@ initflag = 1
        endif
 
 
+       ! Keep SFCL/NSST surface fluxes as the authoritative surface forcing.
+       ! Some TKE-EDMF wrapper interfaces may treat hfx/qfx as work arrays; do not
+       ! allow the wrapper to zero or overwrite the fluxes that should be passed
+       ! onward to diagnostics/history and later physics.
+       hfx_tkeedmf_input_p(:) = hfx_p(its:ite,jts)
+       qfx_tkeedmf_input_p(:) = qfx_tkeedmf_safe_p(:)
+
 call mpas_call_satmedmfvdifq(                                  &
             (ite-its+1), (kte-kts+1), 4, dt_pbl,                      &
             zmid_tkeedmf_p(its:ite,kts:kte,jts),                                &
@@ -1932,8 +1941,8 @@ call mpas_call_satmedmfvdifq(                                  &
             exch_p(its:ite,kts:kte,jts),                              &
             coszen_tkeedmf_p(its:ite,jts),                            &
             tsk_p(its:ite,jts),                                       &
-            hfx_p(its:ite,jts),                                       &
-            qfx_tkeedmf_safe_p,                                       &
+            hfx_tkeedmf_input_p,                                     &
+            qfx_tkeedmf_input_p,                                     &
             stress_tkeedmf_safe_p,                            &
             znt_tkeedmf_pbl,                                       &
             u10_p(its:ite,jts),                                       &
@@ -1953,6 +1962,18 @@ call mpas_call_satmedmfvdifq(                                  &
             tke_edmf_cfg, tke_edmf_errmsg, tke_edmf_errflg)
 
 
+       ! Restore the SFCL/NSST fluxes after the PBL wrapper.  These are input
+       ! surface fluxes, not PBL outputs.  They must remain nonzero so the
+       ! downstream copy-back to diag_physics and history output is correct,
+       ! especially over wet points where NSST supplies the fluxes.
+       hfx_p(its:ite,jts) = hfx_tkeedmf_input_p(:)
+       qfx_p(its:ite,jts) = qfx_tkeedmf_input_p(:)
+       lh_p(its:ite,jts)  = xlv * qfx_p(its:ite,jts)
+
+       write(0,*) 'PBL POST-WRAPPER FLUX RESTORE: hfx=', &
+                  minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
+                  ' qfx=', minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts)), &
+                  ' lh=', minval(lh_p(its:ite,jts)), maxval(lh_p(its:ite,jts))
 
        if (maxval(tkepbl_p(its:ite,kts:kte,jts)) <= 1.01e-9_RKIND) then
        endif

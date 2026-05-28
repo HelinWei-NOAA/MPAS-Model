@@ -1718,10 +1718,25 @@ real(kind=RKIND),dimension(:),pointer:: cd,cda,ck,cka
              qfx_p(i_gfs,jts)  = flqc_p(i_gfs,jts) * (qsurf_gfs - q1_gfs(ii_gfs))
              lh_p(i_gfs,jts)   = hvap_gfs * qfx_p(i_gfs,jts)
 
-             fac2_gfs = min(1.0_RKIND, max(0.0_RKIND, 2.0_RKIND/max(z1_gfs(ii_gfs),2.0_RKIND)))
+             ! Update 2-m shelter diagnostics in the gfs_sfcl bridge.
+             ! If we simply preserve the incoming MPAS diagnostic values, t2m/q2 can
+             ! become time-independent in the GFS-SFCL-only path because no native MPAS
+             ! sfclayer diagnostic routine is called for this branch.  Use the current
+             ! lowest-model-level state, current skin temperature, current qsurf, and the
+             ! GFS sfc_diff stability/exchange result to form an active bounded 2-m value.
+             ! This is intentionally diagnostic only; hfx/qfx remain owned by the flux
+             ! reconstruction above and NSST may overwrite wet-point fluxes later.
+             fac2_gfs = min(0.85_RKIND, max(0.05_RKIND, 2.0_RKIND/max(z1_gfs(ii_gfs),2.0_RKIND)))
+             if (fh_gfs(ii_gfs) < 1.0_RKIND) fac2_gfs = 0.5_RKIND * fac2_gfs
+
              t2m_p(i_gfs,jts)  = t1_gfs(ii_gfs) + fac2_gfs*(tsk_p(i_gfs,jts)-t1_gfs(ii_gfs))
+             t2m_p(i_gfs,jts)  = min(max(t2m_p(i_gfs,jts), 180.0_RKIND), 340.0_RKIND)
+
              q2_p(i_gfs,jts)   = q1_gfs(ii_gfs) + fac2_gfs*(qsurf_gfs-q1_gfs(ii_gfs))
+             q2_p(i_gfs,jts)   = min(max(q2_p(i_gfs,jts), 1.0e-10_RKIND), 0.08_RKIND)
+
              th2m_p(i_gfs,jts) = t2m_p(i_gfs,jts) * (P0/psfc_gfs(ii_gfs))**rcp
+
              u10_p(i_gfs,jts)  = u10_gfs(ii_gfs)
              v10_p(i_gfs,jts)  = v10_gfs(ii_gfs)
           enddo
@@ -1794,6 +1809,10 @@ subroutine driver_gfs_nsst_from_sfclayer(configs, mesh, diag_physics, sfc_input,
    real(kind=RKIND), allocatable :: ps_nst(:), t1_nst(:), q1_nst(:)
    real(kind=RKIND), allocatable :: wind_nst(:), cm_nst(:), ch_nst(:)
    real(kind=RKIND) :: timestep_nst
+   real(kind=RKIND) :: tv_nst_flux, rho_nst_flux
+   real(kind=RKIND) :: es_nst_diag, qsat_nst_diag, fac2_nst_diag
+   real(kind=RKIND), parameter :: eps_nst_diag = 0.622_RKIND
+   real(kind=RKIND), parameter :: epsm1_nst_diag = eps_nst_diag - 1.0_RKIND
 
    im_nst = ite - its + 1
    nthreads_nst = 1
@@ -1911,6 +1930,7 @@ subroutine driver_gfs_nsst_from_sfclayer(configs, mesh, diag_physics, sfc_input,
       endif
    enddo
 
+
    
    ! NST LOCAL NAN GUARD BLOCK
    do ii = 1, im_nst
@@ -1931,6 +1951,7 @@ subroutine driver_gfs_nsst_from_sfclayer(configs, mesh, diag_physics, sfc_input,
       if (oceanfrac_nst(ii) /= oceanfrac_nst(ii)) oceanfrac_nst(ii) = 0.0_RKIND
       oceanfrac_nst(ii) = min(1.0_RKIND, max(0.0_RKIND, oceanfrac_nst(ii)))
    enddo
+
 
    
    ! NST FPE STRICT CLAMP BLOCK
@@ -1991,13 +2012,45 @@ subroutine driver_gfs_nsst_from_sfclayer(configs, mesh, diag_physics, sfc_input,
 
       if (wet_nst(ii)) then
          ! Only wet/ocean points receive NSST-updated fluxes and skin temperature.
-         ! Land points keep the GFS sfc_diff reconstructed hfx/qfx/lh/t2m values.
-         hfx_p(i,jts) = hfx_nst(ii)
-         qfx_p(i,jts) = qfx_nst(ii)
-         if (allocated(lh_p)) lh_p(i,jts) = lh_nst(ii)
+         ! IMPORTANT: sfc_nst_combined returns GFS internal/kinematic fluxes:
+         !   hfx_nst = hflx/(rho*cp)   [K m s-1]
+         !   qfx_nst = evap/(rho*hvap) [kg kg-1 m s-1]
+         ! MPAS diag_physics/PBL expect:
+         !   hfx_p   [W m-2]
+         !   qfx_p   [kg m-2 s-1]
+         !   lh_p    [W m-2]
+         ! Convert back here before passing fluxes to PBL/history.
+         tv_nst_flux  = max(t1_nst(ii) * (1.0_RKIND + 0.61_RKIND*max(q1_nst(ii),0.0_RKIND)), 180.0_RKIND)
+         rho_nst_flux = ps_nst(ii) / (R_d * tv_nst_flux)
+
+         hfx_p(i,jts) = rho_nst_flux * cp             * hfx_nst(ii)
+         qfx_p(i,jts) = rho_nst_flux                  * qfx_nst(ii)
+         if (allocated(lh_p)) lh_p(i,jts) = rho_nst_flux * hvap_nst_local * qfx_nst(ii)
+
+         ! Limit only catastrophic values; do not zero normal negative ocean fluxes.
+         hfx_p(i,jts) = min(max(hfx_p(i,jts), -1000.0_RKIND), 1000.0_RKIND)
+         qfx_p(i,jts) = min(max(qfx_p(i,jts), -5.0e-4_RKIND), 5.0e-4_RKIND)
+         if (allocated(lh_p)) lh_p(i,jts) = hvap_nst_local * qfx_p(i,jts)
+
          tsk_p(i,jts) = tsfco_nst(ii)
+
+         ! After NSST updates the wet-point skin temperature, refresh the 2-m
+         ! diagnostics over water too.  Otherwise t2m/q2 can remain the stale
+         ! values copied in before the gfs_sfcl branch.
+         es_nst_diag = 611.2_RKIND * exp(17.67_RKIND*(tsk_p(i,jts)-273.15_RKIND) / &
+                                      max(tsk_p(i,jts)-29.65_RKIND, 1.0_RKIND))
+         es_nst_diag = min(es_nst_diag, 0.98_RKIND*ps_nst(ii))
+         qsat_nst_diag = eps_nst_diag*es_nst_diag / (ps_nst(ii) + epsm1_nst_diag*es_nst_diag)
+
+         fac2_nst_diag = min(0.85_RKIND, max(0.05_RKIND, 2.0_RKIND/10.0_RKIND))
+         t2m_p(i,jts)  = t1_nst(ii) + fac2_nst_diag*(tsk_p(i,jts)-t1_nst(ii))
+         t2m_p(i,jts)  = min(max(t2m_p(i,jts), 180.0_RKIND), 340.0_RKIND)
+         q2_p(i,jts)   = q1_nst(ii) + fac2_nst_diag*(qsat_nst_diag-q1_nst(ii))
+         q2_p(i,jts)   = min(max(q2_p(i,jts), 1.0e-10_RKIND), 0.08_RKIND)
+         th2m_p(i,jts) = t2m_p(i,jts) * (P0/ps_nst(ii))**rcp
       endif
    enddo
+
    
    deallocate(wet_nst, tgice_nst, tsfco_nst, tsurf_wat_nst, tseal_nst)
    deallocate(xt_nst, xz_nst, dt_cool_nst, z_c_nst, tref_nst)
