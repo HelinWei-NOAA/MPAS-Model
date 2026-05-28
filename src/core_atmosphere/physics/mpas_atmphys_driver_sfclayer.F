@@ -500,6 +500,8 @@
                                          qgh,qsfc,lh,mol,psim,psih,regime,rmol,ust,ustm, &
                                          wspd,znt,zol
  real(kind=RKIND),dimension(:),pointer:: cqs
+real(kind=RKIND),dimension(:),pointer:: q2,t2m,th2m,u10,v10
+real(kind=RKIND),dimension(:),pointer:: cd,cda,ck,cka
 
 !local pointers specific to monin_obukhov:
  real(kind=RKIND),dimension(:),pointer:: fh,fm
@@ -555,6 +557,19 @@
  call mpas_pool_get_array(diag_physics,'znt'     ,znt     )
  call mpas_pool_get_array(diag_physics,'zol'     ,zol     )
 
+ ! Preserve existing near-surface diagnostics and exchange coefficients.
+ ! This is important for the gfs_sfcl bridge, which should not replace
+ ! model/LSM-provided values with artificial placeholders.
+ call mpas_pool_get_array(diag_physics,'q2'      ,q2      )
+ call mpas_pool_get_array(diag_physics,'t2m'     ,t2m     )
+ call mpas_pool_get_array(diag_physics,'th2m'    ,th2m    )
+ call mpas_pool_get_array(diag_physics,'u10'     ,u10     )
+ call mpas_pool_get_array(diag_physics,'v10'     ,v10     )
+ call mpas_pool_get_array(diag_physics,'cd'      ,cd      )
+ call mpas_pool_get_array(diag_physics,'cda'     ,cda     )
+ call mpas_pool_get_array(diag_physics,'ck'      ,ck      )
+ call mpas_pool_get_array(diag_physics,'cka'     ,cka     )
+
  do j = jts,jte
  do i = its,ite
     !input variables:
@@ -592,17 +607,20 @@
     zol_p(i,j)    = zol(i)
 
     !output variables:
-    q2_p(i,j)     = 0._RKIND
-    t2m_p(i,j)    = 0._RKIND
-    th2m_p(i,j)   = 0._RKIND
-    u10_p(i,j)    = 0._RKIND
-    v10_p(i,j)    = 0._RKIND
+    ! Initialize from current MPAS/model state instead of zeroing.
+    ! Traditional MPAS surface-layer schemes overwrite these below, but
+    ! gfs_sfcl uses this branch as a bridge and must preserve valid values.
+    q2_p(i,j)     = q2(i)
+    t2m_p(i,j)    = t2m(i)
+    th2m_p(i,j)   = th2m(i)
+    u10_p(i,j)    = u10(i)
+    v10_p(i,j)    = v10(i)
 
     !output variables (optional):
-    cd_p(i,j)     = 0._RKIND
-    cda_p(i,j)    = 0._RKIND
-    ck_p(i,j)     = 0._RKIND
-    cka_p(i,j)    = 0._RKIND
+    cd_p(i,j)     = cd(i)
+    cda_p(i,j)    = cda(i)
+    ck_p(i,j)     = ck(i)
+    cka_p(i,j)    = cka(i)
     ustm_p(i,j)   = ustm(i)
  enddo
  enddo
@@ -1585,57 +1603,36 @@
 
     case("gfs_sfcl")
        ! ---------------------------------------------------------------
-       ! CLEAN RESTART gfs_sfcl bridge.
+       ! GFS_SFCL bridge: use the current model/LSM-provided values.
        !
-       ! This branch only supplies safe surface-layer exchange/stability
-       ! fields. Water/sea-ice fluxes should be supplied by the NSST/ocean
-       ! flux path before PBL. Do not touch akms_p/akhs_p here; stepwise
-       ! tests showed those arrays are unsafe in this MPAS path.
+       ! Do NOT hard-code cd, znt, ust, flhc/flqc, qgh/qsfc, chs, or 2-m
+       ! diagnostics here.  Those artificial values contaminate t2m, hfx,
+       ! and qfx.  sfclayer_from_MPAS() has already copied the valid
+       ! MPAS/LSM/previous-physics fields into *_p arrays.  This branch
+       ! only protects LH consistency and calls the optional NSST bridge.
        ! ---------------------------------------------------------------
 
-       br_p(its:ite,jts)   = 0.0_RKIND
-       psim_p(its:ite,jts) = 5.0_RKIND
-       psih_p(its:ite,jts) = 5.0_RKIND
-
-       cd_p(its:ite,jts)   = 1.0e-3_RKIND
-       if (allocated(ck_p)) then
-!          ck_p(its:ite,jts) = 1.0e-3_RKIND  ! removed for science test
+       ! Keep LH consistent with the moisture flux only when qfx is valid.
+       ! Do not force hfx/qfx themselves in this surface-layer bridge.
+       if (allocated(lh_p)) then
+          where (abs(qfx_p(its:ite,jts)) > 1.0e-20_RKIND)
+             lh_p(its:ite,jts) = 2.5e6_RKIND * qfx_p(its:ite,jts)
+          end where
        endif
-!
-       znt_p(its:ite,jts)  = 1.0e-4_RKIND  ! removed for science test
-       ust_p(its:ite,jts)  = 0.03_RKIND
 
-       ! Leave fluxes zero in sfclayer. They must be filled by NSST/ocean/LSM.
-!       hfx_p(its:ite,jts)  = 0.0_RKIND  ! removed for science test
-!       qfx_p(its:ite,jts)  = 0.0_RKIND  ! removed for science test
-       ! removed for science test: do not zero lh_p strip here
-       flhc_p(its:ite,jts) = 0.0_RKIND
-       flqc_p(its:ite,jts) = 0.0_RKIND
-
-       qgh_p(its:ite,jts)  = max(qv_p(its:ite,kts,jts), 1.0e-12_RKIND)
-       qsfc_p(its:ite,jts) = max(qv_p(its:ite,kts,jts), 1.0e-12_RKIND)
-
-       chs_p(its:ite,jts)  = 1.0e-3_RKIND
-       chs2_p(its:ite,jts) = 1.0e-3_RKIND
-       cqs2_p(its:ite,jts) = 1.0e-3_RKIND
-       ustm_p(its:ite,jts) = 0.03_RKIND
-       cka_p(its:ite,jts)  = 1.0e-3_RKIND
-
-       ! ---------------------------------------------------------------
-       ! CLEAN GFS_SFCL: call NSST only for gfs_sfcl.
-       ! This keeps NSST out of the main physics driver and avoids
-       ! changing other surface-layer schemes.
-       ! ---------------------------------------------------------------
-
+       ! Optional NSST hook.  For CONUS land tests this should not alter land
+       ! fluxes, but keep it here if your build expects the NSST bridge.
        call driver_gfs_nsst_from_sfclayer(configs, mesh, diag_physics, sfc_input, its, ite, jts)
 
-       ! GFS_SFCL force lh after NSST: keep LH consistent with QFX before sfclayer_to_MPAS.
+       ! Re-sync LH after NSST only where NSST/flux path changed qfx.
        if (allocated(lh_p)) then
-          lh_p(its:ite,jts) = 2.5e6_RKIND * qfx_p(its:ite,jts)
+          where (abs(qfx_p(its:ite,jts)) > 1.0e-20_RKIND)
+             lh_p(its:ite,jts) = 2.5e6_RKIND * qfx_p(its:ite,jts)
+          end where
        endif
 
+       ! No assignment to akms_p/akhs_p in this path.
 
-       ! Do not assign akms_p/akhs_p in this path.
 
 
 
