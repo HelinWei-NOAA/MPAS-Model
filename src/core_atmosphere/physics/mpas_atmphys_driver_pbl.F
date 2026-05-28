@@ -13,6 +13,8 @@
 
  use mpas_atmphys_constants
  use mpas_atmphys_vars
+ use mpas_satmedmfvdifq_wrapper_mod, only : mpas_satmedmfvdifq_config_type, &
+                                            mpas_call_satmedmfvdifq
 
  use bl_mynn,only: bl_mynn_init
  use module_bl_mynn,only: mynn_bl_driver
@@ -148,6 +150,28 @@
        if(.not.allocated(v10_p)   ) allocate(v10_p(ims:ime,jms:jme)         )
        if(.not.allocated(exch_p)  ) allocate(exch_p(ims:ime,kms:kme,jms:jme))
        if(.not.allocated(wstar_p) ) allocate(wstar_p(ims:ime,jms:jme)       )
+
+
+    case("bl_tke_edmf")
+       ! Minimal MPAS application additions for UFS TKE-EDMF adapter.
+       ! Reuse existing local arrays to stage MPAS fields for the wrapper:
+       !   dx_p       : areaCell
+       !   tsk_p      : skin temperature
+       !   psim_p     : fm
+       !   psih_p     : fh
+       !   rthraten_p : SW radiative heating
+       !   exch_p     : LW radiative heating
+       if(.not.allocated(vegfra_p)  ) allocate(vegfra_p(ims:ime,jms:jme)      )
+       if(.not.allocated(br_p)      ) allocate(br_p(ims:ime,jms:jme)          )
+       if(.not.allocated(dx_p)      ) allocate(dx_p(ims:ime,jms:jme)          )
+       if(.not.allocated(tsk_p)     ) allocate(tsk_p(ims:ime,jms:jme)         )
+       if(.not.allocated(psim_p)    ) allocate(psim_p(ims:ime,jms:jme)        )
+       if(.not.allocated(psih_p)    ) allocate(psih_p(ims:ime,jms:jme)        )
+       if(.not.allocated(u10_p)     ) allocate(u10_p(ims:ime,jms:jme)         )
+       if(.not.allocated(v10_p)     ) allocate(v10_p(ims:ime,jms:jme)         )
+       if(.not.allocated(exch_p)    ) allocate(exch_p(ims:ime,kms:kme,jms:jme))
+       if(.not.allocated(rthraten_p)) allocate(rthraten_p(ims:ime,kms:kme,jms:jme))
+       if(.not.allocated(tkepbl_p)  ) allocate(tkepbl_p(ims:ime,kms:kme,jms:jme)    )
 
     case("bl_mynn")
        if(.not.allocated(kbl_plume_p) ) allocate(kbl_plume_p(ims:ime,jms:jme)         )
@@ -334,6 +358,20 @@
        if(allocated(exch_p)  ) deallocate(exch_p  )
        if(allocated(wstar_p) ) deallocate(wstar_p )
 
+
+    case("bl_tke_edmf")
+       if(allocated(vegfra_p)  ) deallocate(vegfra_p  )
+       if(allocated(br_p)      ) deallocate(br_p      )
+       if(allocated(dx_p)      ) deallocate(dx_p      )
+       if(allocated(tsk_p)     ) deallocate(tsk_p     )
+       if(allocated(psim_p)    ) deallocate(psim_p    )
+       if(allocated(psih_p)    ) deallocate(psih_p    )
+       if(allocated(u10_p)     ) deallocate(u10_p     )
+       if(allocated(v10_p)     ) deallocate(v10_p     )
+       if(allocated(exch_p)    ) deallocate(exch_p    )
+       if(allocated(rthraten_p)) deallocate(rthraten_p)
+       if(allocated(tkepbl_p)  ) deallocate(tkepbl_p    )
+
     case("bl_mynn")
        if(allocated(kbl_plume_p) ) deallocate(kbl_plume_p )
        if(allocated(dx_p)        ) deallocate(dx_p        )
@@ -485,10 +523,13 @@
  real(kind=RKIND),dimension(:),pointer:: br,fh,fm,u10,v10
  real(kind=RKIND),dimension(:,:),pointer:: rthratenlw,rthratensw
 
+!local pointers for bl_tke_edmf adapter:
+ real(kind=RKIND),dimension(:),pointer:: areaCell,skintemp,vegfra
+
 !local pointers for MYNN scheme:
  real(kind=RKIND),pointer:: len_disp
  real(kind=RKIND),dimension(:),pointer  :: meshDensity
- real(kind=RKIND),dimension(:),pointer  :: ch,qsfc,rmol,skintemp
+ real(kind=RKIND),dimension(:),pointer  :: ch,qsfc,rmol
  real(kind=RKIND),dimension(:,:),pointer:: cov,qke,qsq,tsq,sh3d,sm3d,tke_pbl,qke_adv,el_pbl
  real(kind=RKIND),dimension(:,:),pointer:: cldfrac_bl,qc_bl,qi_bl
  real(kind=RKIND),dimension(:,:),pointer:: edmf_a,edmf_ent,edmf_qc,edmf_qt,edmf_thl,edmf_w
@@ -513,6 +554,8 @@
  real(kind=RKIND),dimension(:,:),pointer :: zgrid
  integer,dimension(:),pointer            :: lowlyr
 !-----------------------------------------------------------------------------------------------------------------
+
+
 
  call mpas_pool_get_config(configs,'config_pbl_scheme',pbl_scheme)
 
@@ -662,6 +705,39 @@
        do k = kts,kte
        do i = its,ite
           exch_p(i,k,j) = 0._RKIND
+       enddo
+       enddo
+       enddo
+
+
+    case("bl_tke_edmf")
+       ! Stage MPAS fields needed by the UFS TKE-EDMF adapter.
+       call mpas_pool_get_array(sfc_input,   'vegfra'    ,vegfra    )
+       call mpas_pool_get_array(mesh        ,'areaCell'  ,areaCell  )
+       call mpas_pool_get_array(sfc_input   ,'skintemp'  ,skintemp  )
+       call mpas_pool_get_array(diag_physics,'br'        ,br        )
+       call mpas_pool_get_array(diag_physics,'fm'        ,fm        )
+       call mpas_pool_get_array(diag_physics,'fh'        ,fh        )
+       call mpas_pool_get_array(diag_physics,'u10'       ,u10       )
+       call mpas_pool_get_array(diag_physics,'v10'       ,v10       )
+       call mpas_pool_get_array(tend_physics,'rthratenlw',rthratenlw)
+       call mpas_pool_get_array(tend_physics,'rthratensw',rthratensw)
+
+       do j = jts,jte
+       do i = its,ite
+          vegfra_p(i,j) = vegfra(i)
+          dx_p(i,j)   = areaCell(i)
+          tsk_p(i,j)  = skintemp(i)
+          br_p(i,j)   = br(i)
+          psim_p(i,j) = fm(i)
+          psih_p(i,j) = fh(i)
+          u10_p(i,j)  = u10(i)
+          v10_p(i,j)  = v10(i)
+       enddo
+       do k = kts,kte
+       do i = its,ite
+          rthraten_p(i,k,j) = rthratensw(k,i)
+          exch_p(i,k,j)     = rthratenlw(k,i)
        enddo
        enddo
        enddo
@@ -912,6 +988,8 @@
  enddo
  enddo
 
+
+
  end subroutine pbl_from_MPAS
 
 !=================================================================================================================
@@ -937,6 +1015,7 @@
  integer,dimension(:),pointer:: kpbl
 
  real(kind=RKIND),dimension(:),pointer  :: hpbl
+real(kind=RKIND),dimension(:),pointer  :: hfx,qfx,lh
  real(kind=RKIND),dimension(:,:),pointer:: kzh,kzm,kzq
  real(kind=RKIND),dimension(:,:),pointer:: rublten,rvblten,rthblten,rqvblten,rqcblten,rqiblten,rqsblten
  real(kind=RKIND),dimension(:,:),pointer:: rncblten,rniblten,rnifablten,rnwfablten
@@ -1021,6 +1100,33 @@
  endif
 
  pbl_select: select case (trim(pbl_scheme))
+
+
+    case("bl_tke_edmf")
+       call mpas_pool_get_array(diag_physics,'tke_pbl',tke_pbl)
+       call mpas_pool_get_array(diag_physics,'hfx'    ,hfx    )
+       call mpas_pool_get_array(diag_physics,'qfx'    ,qfx    )
+       call mpas_pool_get_array(diag_physics,'lh'     ,lh     )
+
+       ! Keep the surface fluxes visible to diagnostics/history and later physics.
+       ! TKE-EDMF receives hfx_p/qfx_p correctly before the wrapper; without this
+       ! copy-back, diag_physics can still retain stale zero values from an earlier
+       ! path even though the PBL wrapper used nonzero fluxes.
+       do j = jts,jte
+       do i = its,ite
+          hfx(i) = hfx_p(i,j)
+          qfx(i) = qfx_p(i,j)
+          lh(i)  = xlv * qfx_p(i,j)
+       enddo
+       enddo
+
+       do j = jts,jte
+       do k = kts,kte
+       do i = its,ite
+          tke_pbl(k,i) = tkepbl_p(i,k,j)
+       enddo
+       enddo
+       enddo
 
     case("bl_ysu")
        call mpas_pool_get_array(diag_physics,'delta',delta  )
@@ -1370,11 +1476,53 @@
  character(len=StrKIND):: errmsg
  integer:: errflg
 
+!UFS TKE-EDMF adapter variables:
+ type(mpas_satmedmfvdifq_config_type) :: tke_edmf_cfg
+ character(len=256) :: tke_edmf_errmsg
+ integer :: tke_edmf_errflg
+ real(kind=RKIND), allocatable :: coszen_tkeedmf_p(:,:)
+ real(kind=RKIND), allocatable :: lh_tkeedmf_p(:,:)
+ real(kind=RKIND), allocatable :: stress_tkeedmf_p(:,:)
+ real(kind=RKIND), allocatable :: zmid_tkeedmf_p(:,:,:)
+ real(kind=RKIND), allocatable :: zint_tkeedmf_p(:,:,:)
+
 !-----------------------------------------------------------------------------------------------------------------
 !call mpas_log_write('')
 !call mpas_log_write('--- enter subroutine driver_pbl:')
 
 !initialization of CCPP-compliant flags:
+ real(kind=RKIND), dimension(its:ite) :: rb_tkeedmf_pbl
+ real(kind=RKIND), dimension(its:ite) :: fm_tkeedmf_pbl
+ real(kind=RKIND), dimension(its:ite) :: fh_tkeedmf_pbl
+ real(kind=RKIND), dimension(its:ite) :: znt_tkeedmf_pbl
+ real(kind=RKIND), dimension(its:ite) :: vegfra_tkeedmf_pbl
+ real(kind=RKIND), dimension(its:ite) :: stress_tkeedmf_safe_p
+ real(kind=RKIND), dimension(its:ite) :: qfx_tkeedmf_safe_p
+ real(kind=RKIND), dimension(its:ite) :: hfx_tkeedmf_input_p
+ real(kind=RKIND), dimension(its:ite) :: qfx_tkeedmf_input_p
+
+ integer :: n_zero_hfxqfx_tkeedmf
+ integer :: n_bad_hfxqfx_tkeedmf
+ integer :: n_tke_floor_tkeedmf
+ integer :: n_bad_tke_tkeedmf
+
+ integer :: n_bad_hfx_pbl
+ integer :: n_bad_qfx_pbl
+ integer :: n_bad_lh_pbl
+ integer :: n_zero_hfxqfx_pbl
+ integer :: n_bad_hfx_pbl2
+ integer :: n_bad_qfx_pbl2
+ integer :: n_bad_lh_pbl2
+ integer :: n_zero_hfxqfx_pbl2
+ integer :: i_flux_pbl
+ real(kind=RKIND) :: rho_flux_pbl
+ real(kind=RKIND) :: wspd_flux_pbl
+ real(kind=RKIND) :: es_flux_pbl
+ real(kind=RKIND) :: qsfc_flux_pbl
+
+ real(kind=RKIND), allocatable :: lh_pbl_safe(:,:)
+ integer :: i_lh_safe, j_lh_safe
+
  errmsg = ' '
  errflg = 0
 
@@ -1387,7 +1535,38 @@
 !copy MPAS arrays to local arrays:
  call pbl_from_MPAS(configs,state,mesh,sfc_input,diag_physics,tend_physics,its,ite)
 
- initflag = 1
+       ! CLEAN RESTART: do not read lh_p in PBL for gfs_sfcl path.
+       ! Build local latent heat diagnostic from valid qfx_p.
+       if (.not. allocated(lh_pbl_safe)) allocate(lh_pbl_safe(its:ite,jts:jte))
+       do j_lh_safe = jts, jte
+          do i_lh_safe = its, ite
+             lh_pbl_safe(i_lh_safe,j_lh_safe) = xlv * qfx_p(i_lh_safe,j_lh_safe)
+          enddo
+       enddo
+
+
+       ! ---------------------------------------------------------------
+       ! FINAL TEST: do not read lh_p; it is unsafe in this gfs_sfcl path.
+       ! Build local latent heat diagnostic from valid qfx_p.
+       ! ---------------------------------------------------------------
+       if (.not. allocated(lh_pbl_safe)) allocate(lh_pbl_safe(its:ite,jts:jte))
+
+       do j_lh_safe = jts, jte
+          do i_lh_safe = its, ite
+             lh_pbl_safe(i_lh_safe,j_lh_safe) = xlv * qfx_p(i_lh_safe,j_lh_safe)
+          enddo
+       enddo
+
+
+
+
+
+
+
+
+
+
+initflag = 1
  if(config_do_restart .or. itimestep > 1) initflag = 0
 
  pbl_select: select case (trim(pbl_scheme))
@@ -1420,6 +1599,401 @@
                  its = its , ite = ite , jts = jts , jte = jte , kts = kts , kte = kte    &
                 )
        call mpas_timer_stop('bl_ysu')
+
+
+    case("bl_tke_edmf")
+       call mpas_timer_start('bl_tke_edmf')
+
+       ! Conservative initial settings.  Expose these through Registry later.
+       tke_edmf_cfg%sa3dtke     = .false.
+       tke_edmf_cfg%tte_edmf    = .false.
+       tke_edmf_cfg%dspheat     = .false.
+       tke_edmf_cfg%do_canopy   = .false.
+       tke_edmf_cfg%cplaqm      = .false.
+       tke_edmf_cfg%gen_tend    = .false.
+       tke_edmf_cfg%ldiag3d     = .false.
+
+       tke_edmf_cfg%sfc_rlm = 0
+       tke_edmf_cfg%tc_pbl  = 0
+       tke_edmf_cfg%use_lpt = 0
+
+       tke_edmf_cfg%xkzm_m  = 1.0_RKIND
+       tke_edmf_cfg%xkzm_h  = 1.0_RKIND
+       tke_edmf_cfg%xkzm_s  = 0.7_RKIND
+       tke_edmf_cfg%dspfac  = 1.0_RKIND
+       tke_edmf_cfg%bl_upfr = 1.0_RKIND
+       tke_edmf_cfg%bl_dnfr = 1.0_RKIND
+       tke_edmf_cfg%rlmx    = 300.0_RKIND
+       tke_edmf_cfg%elmx    = 300.0_RKIND
+
+       tke_edmf_errmsg = ''
+       tke_edmf_errflg = 0
+
+
+
+
+       ! ------------------------------------------------------------------
+       ! NEXT DEBUG: confirm what PBL receives from sfclayer_to_MPAS.
+       ! If sfclayer shows nonzero hfx/qfx but this shows zero/Inf, the problem
+       ! is in pbl_from_MPAS/copy path or a different flux array namespace.
+       ! ------------------------------------------------------------------
+       n_bad_hfx_pbl2 = count(hfx_p(its:ite,jts) /= hfx_p(its:ite,jts)) + &
+                        count(abs(hfx_p(its:ite,jts)) > 2000.0_RKIND)
+       n_bad_qfx_pbl2 = count(qfx_p(its:ite,jts) /= qfx_p(its:ite,jts)) + &
+                        count(abs(qfx_p(its:ite,jts)) > 1.0e-3_RKIND)
+       n_bad_lh_pbl2  = count(lh_p(its:ite,jts)  /= lh_p(its:ite,jts))  + &
+                        count(abs(lh_p(its:ite,jts)) > 3000.0_RKIND)
+       n_zero_hfxqfx_pbl2 = count(abs(hfx_p(its:ite,jts)) <= 1.0e-20_RKIND .and. &
+                                  abs(qfx_p(its:ite,jts)) <= 1.0e-20_RKIND)
+
+       write(0,*) 'PBL COPY-PATH CHECK: strip=', its, ite, jts, &
+                  ' hfx=', minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
+                  ' qfx=', minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts))
+       write(0,*) 'PBL COPY-PATH COUNTS: bad_hfx=', n_bad_hfx_pbl2, &
+                  ' bad_qfx=', n_bad_qfx_pbl2, ' bad_lh=', n_bad_lh_pbl2, &
+                  ' zero_hfxqfx=', n_zero_hfxqfx_pbl2, ' of ', (ite-its+1)
+       write(0,*) 'PBL COPY-PATH SURFACE: xland=', minval(xland_p(its:ite,jts)), maxval(xland_p(its:ite,jts)), &
+                  ' xice=', minval(xice_p(its:ite,jts)), maxval(xice_p(its:ite,jts)), &
+                  ' tsk=', minval(tsk_p(its:ite,jts)), maxval(tsk_p(its:ite,jts)), &
+                  ' znt=', minval(znt_p(its:ite,jts)), maxval(znt_p(its:ite,jts))
+
+       where (hfx_p(its:ite,jts) /= hfx_p(its:ite,jts) .or. &
+              abs(hfx_p(its:ite,jts)) > 2000.0_RKIND)
+          hfx_p(its:ite,jts) = 0.0_RKIND
+       endwhere
+
+       where (qfx_p(its:ite,jts) /= qfx_p(its:ite,jts) .or. &
+              abs(qfx_p(its:ite,jts)) > 1.0e-3_RKIND)
+          qfx_p(its:ite,jts) = 0.0_RKIND
+       endwhere
+
+       where (lh_p(its:ite,jts) /= lh_p(its:ite,jts) .or. &
+              abs(lh_p(its:ite,jts)) > 3000.0_RKIND)
+          lh_p(its:ite,jts) = 0.0_RKIND
+       endwhere
+
+       write(0,*) 'PBL COPY-PATH AFTER SANITIZE: hfx=', &
+                  minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
+                  ' qfx=', minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts))
+
+       ! ------------------------------------------------------------------
+       ! PBL-side surface flux receive/sanitize check.
+       ! If sfclayer_to_MPAS successfully pushed hfx/qfx/lh into diag_physics,
+       ! they should be finite here.  If qfx/lh are Inf/NaN here, the problem
+       ! is between sfclayer_to_MPAS and pbl_from_MPAS or in the PBL copy path.
+       ! ------------------------------------------------------------------
+       n_bad_hfx_pbl = count(hfx_p(its:ite,jts) /= hfx_p(its:ite,jts)) + &
+                       count(abs(hfx_p(its:ite,jts)) > 2000.0_RKIND)
+       n_bad_qfx_pbl = count(qfx_p(its:ite,jts) /= qfx_p(its:ite,jts)) + &
+                       count(abs(qfx_p(its:ite,jts)) > 1.0e-3_RKIND)
+       n_bad_lh_pbl  = count(lh_p(its:ite,jts)  /= lh_p(its:ite,jts))  + &
+                       count(abs(lh_p(its:ite,jts)) > 3000.0_RKIND)
+       n_zero_hfxqfx_pbl = count(abs(hfx_p(its:ite,jts)) <= 1.0e-20_RKIND .and. &
+                                 abs(qfx_p(its:ite,jts)) <= 1.0e-20_RKIND)
+
+       write(0,*) 'PBL RECEIVE flux before sanitize: strip=', its, ite, jts, &
+                  ' hfx=', minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
+                  ' qfx=', minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts))
+       write(0,*) 'PBL RECEIVE flux counts: bad_hfx=', n_bad_hfx_pbl, &
+                  ' bad_qfx=', n_bad_qfx_pbl, ' bad_lh=', n_bad_lh_pbl, &
+                  ' zero_hfxqfx=', n_zero_hfxqfx_pbl, ' of ', (ite-its+1)
+
+       where (hfx_p(its:ite,jts) /= hfx_p(its:ite,jts) .or. &
+              abs(hfx_p(its:ite,jts)) > 2000.0_RKIND)
+          hfx_p(its:ite,jts) = 0.0_RKIND
+       endwhere
+
+       where (qfx_p(its:ite,jts) /= qfx_p(its:ite,jts) .or. &
+              abs(qfx_p(its:ite,jts)) > 1.0e-3_RKIND)
+          qfx_p(its:ite,jts) = 0.0_RKIND
+       endwhere
+
+       where (lh_p(its:ite,jts) /= lh_p(its:ite,jts) .or. &
+              abs(lh_p(its:ite,jts)) > 3000.0_RKIND)
+          lh_p(its:ite,jts) = 0.0_RKIND
+       endwhere
+
+       write(0,*) 'PBL RECEIVE flux after sanitize: hfx=', &
+                  minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
+                  ' qfx=', minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts))
+
+
+       ! ------------------------------------------------------------------
+       ! PBL-side supplemental fluxes for TKE-EDMF only.
+       !
+       ! Do this here instead of inside sfclayer_to_MPAS/copy-back path.
+       ! If hfx/qfx arrive as zero or invalid for this strip, compute finite
+       ! TKE-EDMF input fluxes locally using ck_p, surface-air differences,
+       ! and saturation specific humidity at skin temperature.
+       ! ------------------------------------------------------------------
+       if (maxval(abs(hfx_p(its:ite,jts))) <= 1.0e-20_RKIND .or. &
+           maxval(abs(qfx_p(its:ite,jts))) <= 1.0e-20_RKIND .or. &
+           any(qfx_p(its:ite,jts) /= qfx_p(its:ite,jts)) .or. &
+           any(abs(qfx_p(its:ite,jts)) > 1.0e-3_RKIND) .or. &
+           any(lh_p(its:ite,jts) /= lh_p(its:ite,jts)) .or. &
+           any(abs(lh_p(its:ite,jts)) > 3000.0_RKIND)) then
+
+          do i_flux_pbl = its, ite
+             rho_flux_pbl = psfc_p(i_flux_pbl,jts) / &
+                  (r_d * max(t_p(i_flux_pbl,kts,jts), 180.0_RKIND))
+             rho_flux_pbl = min(max(rho_flux_pbl, 0.2_RKIND), 1.5_RKIND)
+
+             wspd_flux_pbl = max(wspd_p(i_flux_pbl,jts), 1.0_RKIND)
+
+             ck_p(i_flux_pbl,jts) = min(max(ck_p(i_flux_pbl,jts), 1.0e-4_RKIND), 1.0e-2_RKIND)
+
+             es_flux_pbl = 611.2_RKIND * exp(17.67_RKIND * &
+                  (tsk_p(i_flux_pbl,jts) - 273.15_RKIND) / &
+                  max(tsk_p(i_flux_pbl,jts) - 29.65_RKIND, 1.0_RKIND))
+             es_flux_pbl = min(max(es_flux_pbl, 1.0_RKIND), 0.95_RKIND * psfc_p(i_flux_pbl,jts))
+
+             qsfc_flux_pbl = 0.622_RKIND * es_flux_pbl / &
+                  max(psfc_p(i_flux_pbl,jts) - 0.378_RKIND * es_flux_pbl, 1000.0_RKIND)
+             qsfc_flux_pbl = min(max(qsfc_flux_pbl, 1.0e-8_RKIND), 0.05_RKIND)
+
+             hfx_p(i_flux_pbl,jts) = rho_flux_pbl * cp * ck_p(i_flux_pbl,jts) * wspd_flux_pbl * &
+                  (tsk_p(i_flux_pbl,jts) - t_p(i_flux_pbl,kts,jts))
+             qfx_p(i_flux_pbl,jts) = rho_flux_pbl * ck_p(i_flux_pbl,jts) * wspd_flux_pbl * &
+                  (qsfc_flux_pbl - qv_p(i_flux_pbl,kts,jts))
+
+             hfx_p(i_flux_pbl,jts) = min(max(hfx_p(i_flux_pbl,jts), -100.0_RKIND), 300.0_RKIND)
+             qfx_p(i_flux_pbl,jts) = min(max(qfx_p(i_flux_pbl,jts), -1.0e-4_RKIND), 3.0e-4_RKIND)
+             lh_pbl_safe(i_flux_pbl,jts)  = xlv * qfx_p(i_flux_pbl,jts)
+
+             if (hfx_p(i_flux_pbl,jts) /= hfx_p(i_flux_pbl,jts)) hfx_p(i_flux_pbl,jts) = 0.0_RKIND
+             if (qfx_p(i_flux_pbl,jts) /= qfx_p(i_flux_pbl,jts)) qfx_p(i_flux_pbl,jts) = 0.0_RKIND
+             if (lh_pbl_safe(i_flux_pbl,jts)  /= lh_pbl_safe(i_flux_pbl,jts))  lh_pbl_safe(i_flux_pbl,jts)  = 0.0_RKIND
+          enddo
+
+          write(0,*) 'PBL SUPPLEMENTAL FLUX computed for TKE-EDMF: hfx=', &
+                     minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
+                     ' qfx=', minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts))
+       endif
+
+       ! Diagnose why hfx/qfx are zero and TKE is at the floor before staging TKE-EDMF inputs.
+       n_zero_hfxqfx_tkeedmf = count(abs(hfx_p(its:ite,jts)) <= 1.0e-20_RKIND .and. &
+                                     abs(qfx_p(its:ite,jts)) <= 1.0e-20_RKIND)
+       n_bad_hfxqfx_tkeedmf = count(hfx_p(its:ite,jts) /= hfx_p(its:ite,jts)) + &
+                              count(qfx_p(its:ite,jts) /= qfx_p(its:ite,jts)) + &
+                              count(abs(hfx_p(its:ite,jts)) > 2000.0_RKIND) + &
+                              count(abs(qfx_p(its:ite,jts)) > 1.0e-3_RKIND)
+
+       n_tke_floor_tkeedmf = count(tkepbl_p(its:ite,kts:kte,jts) <= 1.01e-9_RKIND)
+       n_bad_tke_tkeedmf = count(tkepbl_p(its:ite,kts:kte,jts) /= tkepbl_p(its:ite,kts:kte,jts))
+
+       if (n_zero_hfxqfx_tkeedmf > 0 .or. n_bad_hfxqfx_tkeedmf > 0 .or. &
+           n_tke_floor_tkeedmf > 0 .or. n_bad_tke_tkeedmf > 0) then
+       endif
+
+
+       ! Debug safeguard: if MPAS TKE is completely missing/floor, seed a tiny
+       ! nonzero value before passing to TKE-EDMF.  Remove after identifying the
+       ! proper prognostic TKE initialization/update path.
+       if (maxval(tkepbl_p(its:ite,kts:kte,jts)) <= 1.01e-9_RKIND) then
+          tkepbl_p(its:ite,kts:kte,jts) = 1.0e-6_RKIND
+       endif
+
+       if (.not. allocated(coszen_tkeedmf_p)) then
+          allocate(coszen_tkeedmf_p(ims:ime,jms:jme))
+          allocate(lh_tkeedmf_p(ims:ime,jms:jme))
+          allocate(stress_tkeedmf_p(ims:ime,jms:jme))
+          allocate(zmid_tkeedmf_p(ims:ime,kms:kme,jms:jme))
+          allocate(zint_tkeedmf_p(ims:ime,kms:kme+1,jms:jme))
+       endif
+
+       do j = jts,jte
+       do i = its,ite
+          coszen_tkeedmf_p(i,j) = 1.0_RKIND
+
+          ! Guard surface fluxes before passing them into TKE-EDMF.
+          ! qfx_p is moisture flux [kg m-2 s-1]; lh_tkeedmf_p is latent heat flux [W m-2].
+          ! Bad qfx/hfx values can create Inf/NaN evap/heat in the TKE-EDMF wrapper.
+          if (qfx_p(i,j) /= qfx_p(i,j) .or. abs(qfx_p(i,j)) > 1.0e-3_RKIND) then
+             qfx_p(i,j) = 0.0_RKIND
+          endif
+
+          if (hfx_p(i,j) /= hfx_p(i,j) .or. abs(hfx_p(i,j)) > 2000.0_RKIND) then
+             hfx_p(i,j) = 0.0_RKIND
+          endif
+
+          ! Pass moisture flux directly to the TKE-EDMF wrapper.
+          ! qfx_tkeedmf_safe_p is kg m-2 s-1; wrapper converts to kg kg-1 m s-1.
+          qfx_tkeedmf_safe_p(i) = qfx_p(i,j)
+
+          ! Keep latent heat flux only as a diagnostic quantity.
+          lh_tkeedmf_p(i,j) = qfx_tkeedmf_safe_p(i) * xlv
+
+          if (lh_tkeedmf_p(i,j) /= lh_tkeedmf_p(i,j) .or. abs(lh_tkeedmf_p(i,j)) > 3000.0_RKIND) then
+             lh_tkeedmf_p(i,j) = 0.0_RKIND
+          endif
+
+          stress_tkeedmf_p(i,j) = ust_p(i,j) * ust_p(i,j)
+
+          if (stress_tkeedmf_p(i,j) /= stress_tkeedmf_p(i,j) .or. &
+              abs(stress_tkeedmf_p(i,j)) > 5.0_RKIND) then
+             stress_tkeedmf_p(i,j) = 1.0e-6_RKIND
+          endif
+
+          ! Build geometric heights from MPAS layer thickness.
+          ! zint is interface height and zmid is layer-center height.
+          zint_tkeedmf_p(i,kts,j) = 0.0_RKIND
+       enddo
+       do k = kts,kte
+       do i = its,ite
+          zint_tkeedmf_p(i,k+1,j) = zint_tkeedmf_p(i,k,j)              &
+                                  + dz_p(i,k,j)
+          zmid_tkeedmf_p(i,k,j) = 0.5_RKIND *                         &
+             (zint_tkeedmf_p(i,k,j) + zint_tkeedmf_p(i,k+1,j))
+       enddo
+       enddo
+       enddo
+
+       
+
+       ! Diagnose staged TKE-EDMF surface forcing after qfx/hfx guards.
+       if (maxval(abs(hfx_p(its:ite,jts))) <= 1.0e-20_RKIND .or. &
+           maxval(abs(qfx_tkeedmf_safe_p)) <= 1.0e-20_RKIND .or. &
+           maxval(tkepbl_p(its:ite,kts:kte,jts)) <= 1.01e-9_RKIND) then
+       endif
+
+       ! Prepare and diagnose surface-layer inputs passed to TKE-EDMF.
+       ! These should come from the selected surface-layer scheme through normal MPAS arrays.
+       rb_tkeedmf_pbl(:) = min(max(br_p(its:ite,jts), -1.0_RKIND), 1.0_RKIND)
+       fm_tkeedmf_pbl(:) = min(max(psim_p(its:ite,jts), 1.0e-6_RKIND), 5.0_RKIND)
+       fh_tkeedmf_pbl(:) = min(max(psih_p(its:ite,jts), 1.0e-6_RKIND), 5.0_RKIND)
+       znt_tkeedmf_pbl(:) = min(max(znt_p(its:ite,jts), 1.0e-4_RKIND), 1.0e-3_RKIND)
+       vegfra_tkeedmf_pbl(:) = vegfra_p(its:ite,jts)
+       if (maxval(vegfra_tkeedmf_pbl) > 1.5_RKIND) vegfra_tkeedmf_pbl(:) = 0.01_RKIND * vegfra_tkeedmf_pbl(:)
+       vegfra_tkeedmf_pbl(:) = min(max(vegfra_tkeedmf_pbl(:), 0.0_RKIND), 1.0_RKIND)
+       stress_tkeedmf_safe_p(:) = min(max(stress_tkeedmf_p(its:ite,jts), 1.0e-6_RKIND), 5.0_RKIND)
+
+       write(0,*) 'PBL raw sfcl inputs before limiting: br=', minval(br_p(its:ite,jts)), maxval(br_p(its:ite,jts)), &
+                  ' psim=', minval(psim_p(its:ite,jts)), maxval(psim_p(its:ite,jts)), &
+                  ' psih=', minval(psih_p(its:ite,jts)), maxval(psih_p(its:ite,jts)), &
+                  ' znt=', minval(znt_p(its:ite,jts)), maxval(znt_p(its:ite,jts))
+       write(0,*) 'PBL before TKE-EDMF: znt=', minval(znt_tkeedmf_pbl), maxval(znt_tkeedmf_pbl), &
+                  ' rb=', minval(rb_tkeedmf_pbl), maxval(rb_tkeedmf_pbl), &
+                  ' fm=', minval(fm_tkeedmf_pbl), maxval(fm_tkeedmf_pbl), &
+                  ' fh=', minval(fh_tkeedmf_pbl), maxval(fh_tkeedmf_pbl)
+       write(0,*) 'PBL before TKE-EDMF guarded fluxes: hfx=', minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
+                  ' qfx_safe=', minval(qfx_tkeedmf_safe_p), maxval(qfx_tkeedmf_safe_p), &
+                  ' lh_diag=', minval(lh_tkeedmf_p(its:ite,jts)), maxval(lh_tkeedmf_p(its:ite,jts)), &
+                  ' stress=', minval(stress_tkeedmf_safe_p), maxval(stress_tkeedmf_safe_p)
+
+       if (maxval(abs(hfx_p(its:ite,jts))) == 0.0_RKIND .and. &
+           maxval(abs(qfx_tkeedmf_safe_p)) == 0.0_RKIND) then
+          write(0,*) 'WARNING: TKE-EDMF called with zero hfx and zero qfx for this strip.'
+       endif
+
+
+
+       write(0,*) 'PBL STAGED FLUX CHECK: hfx=', minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
+                  ' qfx_safe=', minval(qfx_tkeedmf_safe_p), maxval(qfx_tkeedmf_safe_p), &
+                  ' lh_diag=', minval(lh_tkeedmf_p(its:ite,jts)), maxval(lh_tkeedmf_p(its:ite,jts))
+
+       write(0,*) 'PBL UNIT CHECK before wrapper: znt_m=', minval(znt_tkeedmf_pbl), maxval(znt_tkeedmf_pbl), &
+                  ' qfx_kgm2s=', minval(qfx_tkeedmf_safe_p), maxval(qfx_tkeedmf_safe_p), &
+                  ' hfx_Wm2=', minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts))
+
+
+       ! Vertical orientation check:
+       ! If kts is the lowest model level, zmid(kts) should be near the surface
+       ! and pressure at kts should be much larger than pressure at kte.
+       write(0,*) 'VERT CHECK before TKE-EDMF: zmid_kts=', &
+                  minval(zmid_tkeedmf_p(its:ite,kts,jts)), maxval(zmid_tkeedmf_p(its:ite,kts,jts)), &
+                  ' zmid_kte=', minval(zmid_tkeedmf_p(its:ite,kte,jts)), maxval(zmid_tkeedmf_p(its:ite,kte,jts))
+       write(0,*) 'VERT CHECK before TKE-EDMF: p_kts=', &
+                  minval(pres_hyd_p(its:ite,kts,jts)), maxval(pres_hyd_p(its:ite,kts,jts)), &
+                  ' p_kte=', minval(pres_hyd_p(its:ite,kte,jts)), maxval(pres_hyd_p(its:ite,kte,jts))
+       write(0,*) 'VERT CHECK before TKE-EDMF: t_kts=', &
+                  minval(t_p(its:ite,kts,jts)), maxval(t_p(its:ite,kts,jts)), &
+                  ' t_kte=', minval(t_p(its:ite,kte,jts)), maxval(t_p(its:ite,kte,jts))
+
+       if (minval(pres_hyd_p(its:ite,kts,jts)) < minval(pres_hyd_p(its:ite,kte,jts))) then
+          write(0,*) 'WARNING: vertical index may be top-down for TKE-EDMF call; kts pressure < kte pressure.'
+          write(0,*) 'If so, reverse all vertical arrays before calling satmedmfvdifq.'
+       endif
+
+
+       ! Keep SFCL/NSST surface fluxes as the authoritative surface forcing.
+       ! Some TKE-EDMF wrapper interfaces may treat hfx/qfx as work arrays; do not
+       ! allow the wrapper to zero or overwrite the fluxes that should be passed
+       ! onward to diagnostics/history and later physics.
+       hfx_tkeedmf_input_p(:) = hfx_p(its:ite,jts)
+       qfx_tkeedmf_input_p(:) = qfx_tkeedmf_safe_p(:)
+
+call mpas_call_satmedmfvdifq(                                  &
+            (ite-its+1), (kte-kts+1), 4, dt_pbl,                      &
+            zmid_tkeedmf_p(its:ite,kts:kte,jts),                                &
+            zint_tkeedmf_p(its:ite,kts:kte+1,jts),                              &
+            dx_p(its:ite,jts),                                        &
+            u_p(its:ite,kts:kte,jts),                                 &
+            v_p(its:ite,kts:kte,jts),                                 &
+            t_p(its:ite,kts:kte,jts),                                 &
+            qv_p(its:ite,kts:kte,jts),                                &
+            qc_p(its:ite,kts:kte,jts),                                &
+            qi_p(its:ite,kts:kte,jts),                                &
+            tkepbl_p(its:ite,kts:kte,jts),                            &
+            pres_hyd_p(its:ite,kts:kte,jts),                          &
+            pres2_hyd_p(its:ite,kts:kte+1,jts),                       &
+            pi_p(its:ite,kts:kte,jts),                                &
+            rthraten_p(its:ite,kts:kte,jts),                          &
+            exch_p(its:ite,kts:kte,jts),                              &
+            coszen_tkeedmf_p(its:ite,jts),                            &
+            tsk_p(its:ite,jts),                                       &
+            hfx_tkeedmf_input_p,                                     &
+            qfx_tkeedmf_input_p,                                     &
+            stress_tkeedmf_safe_p,                            &
+            znt_tkeedmf_pbl,                                       &
+            u10_p(its:ite,jts),                                       &
+            v10_p(its:ite,jts),                                       &
+            vegfra_tkeedmf_pbl,                                    &
+            rb_tkeedmf_pbl,                                        &
+            fm_tkeedmf_pbl,                                      &
+            fh_tkeedmf_pbl,                                      &
+            hpbl_p(its:ite,jts),                                      &
+            kpbl_p(its:ite,jts),                                      &
+            rthblten_p(its:ite,kts:kte,jts),                          &
+            rublten_p(its:ite,kts:kte,jts),                           &
+            rvblten_p(its:ite,kts:kte,jts),                           &
+            rqvblten_p(its:ite,kts:kte,jts),                          &
+            rqcblten_p(its:ite,kts:kte,jts),                          &
+            rqiblten_p(its:ite,kts:kte,jts),                          &
+            tke_edmf_cfg, tke_edmf_errmsg, tke_edmf_errflg)
+
+
+       ! Restore the SFCL/NSST fluxes after the PBL wrapper.  These are input
+       ! surface fluxes, not PBL outputs.  They must remain nonzero so the
+       ! downstream copy-back to diag_physics and history output is correct,
+       ! especially over wet points where NSST supplies the fluxes.
+       hfx_p(its:ite,jts) = hfx_tkeedmf_input_p(:)
+       qfx_p(its:ite,jts) = qfx_tkeedmf_input_p(:)
+       lh_p(its:ite,jts)  = xlv * qfx_p(its:ite,jts)
+
+       write(0,*) 'PBL POST-WRAPPER FLUX RESTORE: hfx=', &
+                  minval(hfx_p(its:ite,jts)), maxval(hfx_p(its:ite,jts)), &
+                  ' qfx=', minval(qfx_p(its:ite,jts)), maxval(qfx_p(its:ite,jts)), &
+                  ' lh=', minval(lh_p(its:ite,jts)), maxval(lh_p(its:ite,jts))
+
+       if (maxval(tkepbl_p(its:ite,kts:kte,jts)) <= 1.01e-9_RKIND) then
+       endif
+
+       write(0,*) 'PBL after TKE-EDMF: rth=', minval(rthblten_p(its:ite,kts:kte,jts)), &
+                  maxval(rthblten_p(its:ite,kts:kte,jts)), &
+                  ' ru=', minval(rublten_p(its:ite,kts:kte,jts)), maxval(rublten_p(its:ite,kts:kte,jts)), &
+                  ' rv=', minval(rvblten_p(its:ite,kts:kte,jts)), maxval(rvblten_p(its:ite,kts:kte,jts))
+       write(0,*) 'PBL after TKE-EDMF: qv=', minval(rqvblten_p(its:ite,kts:kte,jts)), &
+                  maxval(rqvblten_p(its:ite,kts:kte,jts)), &
+                  ' qc=', minval(rqcblten_p(its:ite,kts:kte,jts)), maxval(rqcblten_p(its:ite,kts:kte,jts)), &
+                  ' qi=', minval(rqiblten_p(its:ite,kts:kte,jts)), maxval(rqiblten_p(its:ite,kts:kte,jts))
+
+       if (tke_edmf_errflg /= 0) then
+          write(*,*) 'FATAL in bl_tke_edmf: ', trim(tke_edmf_errmsg)
+          call mpas_timer_stop('bl_tke_edmf')
+          stop 1
+       endif
+
+       call mpas_timer_stop('bl_tke_edmf')
 
     case("bl_mynn")
        call mpas_pool_get_config(configs,'config_mynn_cloudpdf'   ,bl_mynn_cloudpdf   )
@@ -1760,6 +2334,16 @@
  call pbl_to_MPAS(configs,state,diag_physics,tend_physics,its,ite)
 
 !call mpas_log_write('--- end subroutine driver_pbl.')
+
+ if (allocated(lh_pbl_safe)) then
+    deallocate(lh_pbl_safe)
+ endif
+
+ if (allocated(lh_pbl_safe)) then
+    deallocate(lh_pbl_safe)
+ endif
+
+
 
  end subroutine driver_pbl
 

@@ -6,7 +6,7 @@ endif
 
 all:
 	./../tools/manage_externals/checkout_externals --externals ./../Externals.cfg
-	$(MAKE) lookup_tables core_physics_init core_physics_mmm core_microphysics core_UGWP core_RUCLSM core_mynnedmf core_mynnsfc core_GFL core_SMOKE core_physics_wrf core_physics_noahmp core_physics
+	$(MAKE) lookup_tables core_physics_init core_physics_mmm core_microphysics core_UGWP core_RUCLSM core_mynnedmf core_mynnsfc core_GFL core_SMOKE core_physics_wrf core_physics_noahmp core_physics_gfs core_physics
 
 dummy:
 	echo "****** compiling physics ******"
@@ -33,6 +33,7 @@ OBJS = \
 	mpas_atmphys_driver_radiation_lw.o \
 	mpas_atmphys_driver_radiation_sw.o \
 	mpas_atmphys_driver_seaice.o       \
+	mpas_sfc_diff_wrapper_mod.o        \
 	mpas_atmphys_driver_sfclayer.o     \
 	mpas_atmphys_driver_smoke.o        \
 	mpas_atmphys_finalize.o            \
@@ -56,7 +57,8 @@ OBJS = \
 	mpas_atmphys_todynamics.o          \
 	mpas_atmphys_update_surface.o      \
 	mpas_atmphys_update.o              \
-	mpas_atmphys_vars.o
+	mpas_atmphys_vars.o                \
+	mpas_satmedmfvdifq_wrapper_mod.o
 
 lookup_tables:
 	./checkout_data_files.sh
@@ -93,13 +95,17 @@ core_physics_noahmp: core_physics_init
 	(cd physics_noahmp/src; $(MAKE) all COREDEF="$(COREDEF)")
 	(cd physics_noahmp/drivers/mpas; $(MAKE) all COREDEF="$(COREDEF)")
 
+core_physics_gfs: core_physics_init
+	(cd physics_gfs; $(MAKE) -f Makefile all COREDEF="$(COREDEF)")
+
 core_physics_init: $(OBJS_init)
 
-core_physics: core_microphysics core_mynnedmf core_mynnsfc core_RUCLSM core_GFL core_SMOKE core_physics_wrf core_physics_noahmp 
+core_physics: core_microphysics core_mynnedmf core_mynnsfc core_RUCLSM core_GFL core_SMOKE core_physics_wrf core_physics_noahmp core_physics_gfs 
 	($(MAKE) phys_interface COREDEF="$(COREDEF)")
 	ar -ru libphys.a $(OBJS_init) $(OBJS)
 	($(MAKE) -C ./physics_mmm -f Makefile.mpas physics_mmm_lib)
 	($(MAKE) -C ./physics_wrf physics_wrf_lib)
+	($(MAKE) -C ./physics_gfs -f Makefile.mpas physics_gfs_lib)
 	($(MAKE) -C ./physics_noahmp/drivers/mpas driver_lib)
 	($(MAKE) -C ./physics_noahmp/src src_lib)
 	($(MAKE) -C ./physics_noahmp/utility utility_lib)
@@ -172,9 +178,25 @@ mpas_atmphys_driver_oml.o: \
 	mpas_atmphys_landuse.o \
 	mpas_atmphys_vars.o
 
+mpas_sfc_diff_wrapper_mod.o: \
+	mpas_atmphys_constants.o \
+	mpas_atmphys_vars.o \
+	physics_gfs/sfc_diff.o\
+	mpas_atmphys_utilities.o
+
+# TKE-EDMF / SATMEDMF dependencies for MPAS application.
+# GFS/UFS science objects are built in physics_gfs/.
+mpas_satmedmfvdifq_wrapper_mod.o: \
+	mpas_atmphys_constants.o \
+	mpas_atmphys_vars.o \
+	mpas_atmphys_utilities.o \
+	mpas_sfc_diff_wrapper_mod.o
+
+
 mpas_atmphys_driver_pbl.o: \
 	mpas_atmphys_constants.o \
-	mpas_atmphys_vars.o
+	mpas_atmphys_vars.o \
+	mpas_satmedmfvdifq_wrapper_mod.o
 
 mpas_atmphys_driver_radiation_lw.o: \
 	mpas_atmphys_camrad_init.o \
@@ -198,7 +220,8 @@ mpas_atmphys_driver_seaice.o: \
 
 mpas_atmphys_driver_sfclayer.o: \
 	mpas_atmphys_constants.o \
-	mpas_atmphys_vars.o
+	mpas_atmphys_vars.o \
+	mpas_sfc_diff_wrapper_mod.o
 
 mpas_atmphys_driver_smoke.o: \
 	mpas_atmphys_constants.o \
@@ -285,6 +308,7 @@ mpas_atmphys_update.o: \
 clean:
 	$(RM) *.o *.mod *.f90 libphys.a
 	( cd physics_wrf; $(MAKE) clean )
+	( if [ -d physics_gfs ]; then cd physics_gfs; $(MAKE) -f Makefile.mpas clean; fi; )
 	( if [ -d physics_mmm ]; then cd physics_mmm; $(MAKE) -f Makefile.mpas clean; fi; )
 	( cd physics_noahmp/drivers/mpas; $(MAKE) clean )
 	( cd physics_noahmp/src; $(MAKE) clean )
@@ -304,16 +328,16 @@ clean:
 	$(RM) $@ $*.mod
 ifeq "$(GEN_F90)" "true"
 	$(CPP) $(CPPFLAGS) $(COREDEF) $(HYDROSTATIC) $(CPPINCLUDES) $< > $*.f90
-	$(FC) $(FFLAGS) -c $*.f90 $(FCINCLUDES) -I./physics_mmm -I./physics_wrf -I./physics_noahmp -I./physics_noahmp/utility -I./physics_noahmp/drivers/mpas -I./physics_noahmp/src -I./physics_noaa/TEMPO -I./physics_noaa/UGWP -I./physics_noaa/MYNN-EDMF -I./physics_noaa/MYNN-SFC -I./physics_noaa/RUCLSM -I./physics_noaa/GFL -I./physics_noaa/SMOKE -I.. -I../../framework -I../../external/esmf_time_f90
+	$(FC) $(FFLAGS) -c $*.f90 $(FCINCLUDES) -I./physics_mmm -I./physics_wrf -I./physics_gfs -I./physics_noahmp -I./physics_noahmp/utility -I./physics_noahmp/drivers/mpas -I./physics_noahmp/src -I./physics_noaa/TEMPO -I./physics_noaa/UGWP -I./physics_noaa/MYNN-EDMF -I./physics_noaa/MYNN-SFC -I./physics_noaa/RUCLSM -I./physics_noaa/GFL -I./physics_noaa/SMOKE -I.. -I../../framework -I../../external/esmf_time_f90
 else
-	$(FC) $(CPPFLAGS) $(COREDEF) $(HYDROSATIC) $(FFLAGS) -c $*.F $(CPPINCLUDES) $(FCINCLUDES) -I./physics_mmm -I./physics_wrf -I./physics_noahmp -I./physics_noahmp/utility -I./physics_noahmp/drivers/mpas -I./physics_noahmp/src -I./physics_noaa/TEMPO -I./physics_noaa/UGWP -I./physics_noaa/MYNN-EDMF -I./physics_noaa/MYNN-SFC -I./physics_noaa/RUCLSM -I./physics_noaa/GFL -I./physics_noaa/SMOKE -I.. -I../../framework -I../../external/esmf_time_f90
+	$(FC) $(CPPFLAGS) $(COREDEF) $(HYDROSTATIC) $(FFLAGS) -c $*.F $(CPPINCLUDES) $(FCINCLUDES) -I./physics_mmm -I./physics_wrf -I./physics_gfs -I./physics_noahmp -I./physics_noahmp/utility -I./physics_noahmp/drivers/mpas -I./physics_noahmp/src -I./physics_noaa/TEMPO -I./physics_noaa/UGWP -I./physics_noaa/MYNN-EDMF -I./physics_noaa/MYNN-SFC -I./physics_noaa/RUCLSM -I./physics_noaa/GFL -I./physics_noaa/SMOKE -I.. -I../../framework -I../../external/esmf_time_f90
 endif
 
 .F90.o:
 	$(RM) $@ $*.mod
 ifeq "$(GEN_F90)" "true"
 	$(CPP) $(CPPFLAGS) $(COREDEF) $(HYDROSTATIC) $(CPPINCLUDES) $< > $*.f90
-	$(FC) $(FFLAGS) -c $*.f90 $(FCINCLUDES) -I./physics_mmm -I./physics_wrf -I./physics_noaa/TEMPO -I./physics_noaa/UGWP -I./physics_noaa/MYNN-EDMF -I./physics_noaa/MYNN-SFC -I./physics_noaa/RUCLSM -I./physics_noaa/GFL -I./physics_noaa/SMOKE -I.. -I../../framework -I../../external/esmf_time_f90
+	$(FC) $(FFLAGS) -c $*.f90 $(FCINCLUDES) -I./physics_noahmp -I./physics_noahmp/utility -I./physics_noahmp/drivers/mpas -I./physics_noahmp/src -I./physics_mmm -I./physics_wrf -I./physics_gfs -I./physics_noaa/TEMPO -I./physics_noaa/UGWP -I./physics_noaa/MYNN-EDMF -I./physics_noaa/MYNN-SFC -I./physics_noaa/RUCLSM -I./physics_noaa/GFL -I./physics_noaa/SMOKE -I.. -I../../framework -I../../external/esmf_time_f90
 else
-	$(FC) $(CPPFLAGS) $(COREDEF) $(HYDROSATIC) $(FFLAGS) -c $*.F90 $(CPPINCLUDES) $(FCINCLUDES) -I./physics_mmm -I./physics_wrf -I./physics_noaa/TEMPO -I./physics_noaa/UGWP -I./physics_noaa/MYNN-EDMF -I./physics_noaa/MYNN-SFC -I./physics_noaa/RUCLSM -I./physics_noaa/GFL -I./physics_noaa/SMOKE -I.. -I../../framework -I../../external/esmf_time_f90
+	$(FC) $(CPPFLAGS) $(COREDEF) $(HYDROSTATIC) $(FFLAGS) -c $*.F90 $(CPPINCLUDES) $(FCINCLUDES) -I./physics_noahmp -I./physics_noahmp/utility -I./physics_noahmp/drivers/mpas -I./physics_noahmp/src -I./physics_mmm -I./physics_wrf -I./physics_gfs -I./physics_noaa/TEMPO -I./physics_noaa/UGWP -I./physics_noaa/MYNN-EDMF -I./physics_noaa/MYNN-SFC -I./physics_noaa/RUCLSM -I./physics_noaa/GFL -I./physics_noaa/SMOKE -I.. -I../../framework -I../../external/esmf_time_f90
 endif

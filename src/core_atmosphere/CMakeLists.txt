@@ -28,6 +28,8 @@ set(ATMOSPHERE_CORE_PHYSICS_SOURCES
     mpas_atmphys_driver_convection.F
     mpas_atmphys_driver_gwdo.F
     mpas_atmphys_driver_lsm.F
+    mpas_sfc_diff_wrapper_mod.F90
+    mpas_satmedmfvdifq_wrapper_mod.F90
     mpas_atmphys_driver_pbl.F
     mpas_atmphys_driver_radiation_lw.F
     mpas_atmphys_driver_radiation_sw.F
@@ -102,6 +104,48 @@ set(ATMOSPHERE_CORE_PHYSICS_WRF_SOURCES
 )
 
 list(TRANSFORM ATMOSPHERE_CORE_PHYSICS_WRF_SOURCES PREPEND physics/physics_wrf/)
+
+
+# physics/physics_gfs/
+set(ATMOSPHERE_CORE_PHYSICS_GFS_SOURCES
+    gfs_tke_edmf_compat.F
+    tridi_mod.F
+    mfpbltq_mod.F
+    mfscuq_mod.F
+    canopy_utils_mod.F
+
+    # GFS surface layer
+    sfc_diff.F
+
+    # Required NSST support modules.
+    # These must be copied into physics/physics_gfs/ from UFS/GFS physics.
+    iw3jdn.F
+    module_nst_parameters.F90
+    module_nst_water_prop.F90
+    nst_module.F90
+
+    # Combined NSST pre/main/post wrapper
+    sfc_nst_combined.F90
+
+    # GFS TKE-EDMF PBL
+    satmedmfvdifq.F
+)
+list(TRANSFORM ATMOSPHERE_CORE_PHYSICS_GFS_SOURCES PREPEND physics/physics_gfs/)
+
+set_source_files_properties(
+    ${ATMOSPHERE_CORE_PHYSICS_GFS_SOURCES}
+    PROPERTIES Fortran_FORMAT FIXED
+)
+
+# NSST sources are free-format Fortran
+set_source_files_properties(
+    physics/physics_gfs/module_nst_parameters.F90
+    physics/physics_gfs/module_nst_water_prop.F90
+    physics/physics_gfs/nst_module.F90
+    physics/physics_gfs/sfc_nst_combined.F90
+    PROPERTIES Fortran_FORMAT FREE
+)
+
 
 
 # physics/physics_noaa/GFL/
@@ -514,6 +558,7 @@ add_library(core_atmosphere ${ATMOSPHERE_CORE_SOURCES}
             ${ATMOSPHERE_CORE_PHYSICS_SOURCES}
             ${ATMOSPHERE_CORE_PHYSICS_MMM_SOURCES}
             ${ATMOSPHERE_CORE_PHYSICS_WRF_SOURCES}
+            ${ATMOSPHERE_CORE_PHYSICS_GFS_SOURCES}
             ${ATMOSPHERE_CORE_PHYSICS_UGWP_SOURCES}
             ${ATMOSPHERE_CORE_PHYSICS_TEMPO_SOURCES}
             ${ATMOSPHERE_CORE_PHYSICS_MYNN-EDMF_SOURCES}

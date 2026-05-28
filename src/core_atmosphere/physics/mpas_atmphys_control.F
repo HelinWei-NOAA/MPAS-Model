@@ -221,6 +221,7 @@
            config_pbl_scheme .eq. 'bl_mynn'     .or. &
            config_pbl_scheme .eq. 'bl_mynnedmf' .or. &
            config_pbl_scheme .eq. 'bl_ysu'      .or. &
+           config_pbl_scheme .eq. 'bl_tke_edmf' .or. &
            config_pbl_scheme .eq. 'bl_myj')) then
 
     write(mpas_err_message,'(A,A20)') 'illegal value for pbl_scheme: ', &
@@ -316,8 +317,9 @@
            config_sfclayer_scheme .eq. 'sf_mynnsfclay' .or. &
            config_sfclayer_scheme .eq. 'sf_monin_obukhov' .or. &
            config_sfclayer_scheme .eq. 'sf_monin_obukhov_rev' .or. &
+           config_sfclayer_scheme .eq. 'gfs_sfcl' .or. &
            config_sfclayer_scheme .eq. 'sf_myj' )) then
- 
+
     write(mpas_err_message,'(A,A20)') 'illegal value for surface layer scheme: ', &
           trim(config_sfclayer_scheme)
     call physics_error_fatal(mpas_err_message)
@@ -326,6 +328,20 @@
        config_sfclayer_scheme = 'sf_mynn'
     elseif(config_pbl_scheme == 'bl_mynnedmf') then
        config_sfclayer_scheme = 'sf_mynnsfclay'
+    elseif(config_pbl_scheme == 'bl_tke_edmf') then
+       if(config_sfclayer_scheme == 'suite' .or. &
+          config_sfclayer_scheme == 'sf_monin_obukhov' .or. &
+          config_sfclayer_scheme == 'sf_monin_obukhov_rev') then
+          write(mpas_err_message,'(A)') &
+             '    setting config_sfclayer_scheme = gfs_sfcl for bl_tke_edmf PBL'
+          call physics_message(mpas_err_message)
+          config_sfclayer_scheme = 'gfs_sfcl'
+       elseif(config_sfclayer_scheme /= 'gfs_sfcl') then
+          write(mpas_err_message,'(A,A20)') &
+             'wrong choice for surface layer scheme with TKE-EDMF PBL: ', &
+             trim(config_sfclayer_scheme)
+          call physics_error_fatal(mpas_err_message)
+       endif
     elseif(config_pbl_scheme == 'bl_ysu') then
        if(config_sfclayer_scheme /= 'sf_monin_obukhov' .and. &
           config_sfclayer_scheme /= 'sf_monin_obukhov_rev') then
@@ -598,4 +614,3 @@
 !=================================================================================================================
  end module mpas_atmphys_control
 !=================================================================================================================
-

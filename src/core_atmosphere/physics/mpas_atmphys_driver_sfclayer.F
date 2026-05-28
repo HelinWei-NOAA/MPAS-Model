@@ -7,6 +7,7 @@
 !
 !=================================================================================================================
  module mpas_atmphys_driver_sfclayer
+ use mpas_gfs_nst_wrapper, only : mpas_nst_pre, mpas_nst_main, mpas_nst_post
  use mpas_kind_types
  use mpas_pool_routines
  use mpas_timer, only : mpas_timer_start, mpas_timer_stop
@@ -21,6 +22,7 @@
  use sf_mynn,only: sf_mynn_init
  use sf_sfclayrev,only: sf_sfclayrev_init
  use module_sf_myjsfc
+ use mpas_sfc_diff_wrapper_mod, only: mpas_call_sfc_diff
 
  implicit none
  private
@@ -118,6 +120,7 @@
  if(.not.allocated(chs_p)   ) allocate(chs_p(ims:ime,jms:jme)   )
  if(.not.allocated(chs2_p)  ) allocate(chs2_p(ims:ime,jms:jme)  )
  if(.not.allocated(ck_p)    ) allocate(ck_p(ims:ime,jms:jme)    )
+ if(allocated(ck_p)) ck_p(ims:ime,jms:jme) = 1.0e-6_RKIND  ! CK_P SAFE INIT
  if(.not.allocated(cka_p)   ) allocate(cka_p(ims:ime,jms:jme)   )
  if(.not.allocated(cpm_p)   ) allocate(cpm_p(ims:ime,jms:jme)   )
  if(.not.allocated(cqs2_p)  ) allocate(cqs2_p(ims:ime,jms:jme)  )
@@ -125,6 +128,21 @@
  if(.not.allocated(flhc_p)  ) allocate(flhc_p(ims:ime,jms:jme)  )
  if(.not.allocated(flqc_p)  ) allocate(flqc_p(ims:ime,jms:jme)  )
  if(.not.allocated(hfx_p)   ) allocate(hfx_p(ims:ime,jms:jme)   )
+
+ ! SCIENCE TEST OPTIONAL FIELD ALLOCATION
+ if(.not.allocated(lh_p)    ) then
+    allocate(lh_p(ims:ime,jms:jme)    )
+    lh_p(ims:ime,jms:jme) = 0.0_RKIND
+ endif
+ if(.not.allocated(xice_p)  ) then
+    allocate(xice_p(ims:ime,jms:jme)  )
+    xice_p(ims:ime,jms:jme) = 0.0_RKIND
+ endif
+ if(.not.allocated(ck_p)    ) then
+    allocate(ck_p(ims:ime,jms:jme)    )
+    ck_p(ims:ime,jms:jme) = 1.0e-6_RKIND
+ endif
+
  if(.not.allocated(hpbl_p)  ) allocate(hpbl_p(ims:ime,jms:jme)  )
  if(.not.allocated(lh_p)    ) allocate(lh_p(ims:ime,jms:jme)    )
  if(.not.allocated(mavail_p)) allocate(mavail_p(ims:ime,jms:jme))
@@ -146,10 +164,13 @@
  if(.not.allocated(v10_p)   ) allocate(v10_p(ims:ime,jms:jme)   )
  if(.not.allocated(wspd_p)  ) allocate(wspd_p(ims:ime,jms:jme)  )
  if(.not.allocated(xland_p) ) allocate(xland_p(ims:ime,jms:jme) )
+ if(.not.allocated(vegfra_p)) allocate(vegfra_p(ims:ime,jms:jme))
+ if(.not.allocated(shdmax_p)) allocate(shdmax_p(ims:ime,jms:jme))
  if(.not.allocated(zol_p)   ) allocate(zol_p(ims:ime,jms:jme)   )
  if(.not.allocated(znt_p)   ) allocate(znt_p(ims:ime,jms:jme)   )
  if(.not.allocated(xice_p)  ) allocate(xice_p(ims:ime,jms:jme)  )
 
+ if(allocated(xice_p)) xice_p(ims:ime,jms:jme) = 0.0_RKIND  ! XICE_P SAFE INIT
  if(config_frac_seaice) then
     if(.not.allocated(sst_p)      ) allocate(sst_p(ims:ime,jms:jme)      )
 
@@ -265,6 +286,15 @@
           if(.not.allocated(pshltr_sea)) allocate(pshltr_sea(ims:ime,jms:jme) )
       endif
 
+
+    case("gfs_sfcl")
+       if(.not.allocated(fh_p)) allocate(fh_p(ims:ime,jms:jme))
+       if(.not.allocated(fm_p)) allocate(fm_p(ims:ime,jms:jme))
+       if(config_frac_seaice) then
+          if(.not.allocated(fh_sea)) allocate(fh_sea(ims:ime,jms:jme))
+          if(.not.allocated(fm_sea)) allocate(fm_sea(ims:ime,jms:jme))
+       endif
+
     case default
 
  end select sfclayer_select
@@ -293,7 +323,8 @@
  if(allocated(cda_p)   ) deallocate(cda_p   )
  if(allocated(chs_p)   ) deallocate(chs_p   )
  if(allocated(chs2_p)  ) deallocate(chs2_p  )
- if(allocated(ck_p)    ) deallocate(ck_p    )
+ ! DEBUG: keep ck_p allocated to avoid access-after-deallocate
+ ! if(allocated(ck_p)) deallocate(ck_p)
  if(allocated(cka_p)   ) deallocate(cka_p   )
  if(allocated(cpm_p)   ) deallocate(cpm_p   )
  if(allocated(cqs2_p)  ) deallocate(cqs2_p  )
@@ -302,7 +333,8 @@
  if(allocated(flqc_p)  ) deallocate(flqc_p  )
  if(allocated(hfx_p)   ) deallocate(hfx_p   )
  if(allocated(hpbl_p)  ) deallocate(hpbl_p  )
- if(allocated(lh_p)    ) deallocate(lh_p    )
+ ! DEBUG: keep lh_p allocated to avoid access-after-deallocate
+ ! if(allocated(lh_p)) deallocate(lh_p)
  if(allocated(mavail_p)) deallocate(mavail_p)
  if(allocated(mol_p)   ) deallocate(mol_p   )
  if(allocated(psih_p)  ) deallocate(psih_p  )
@@ -322,10 +354,12 @@
  if(allocated(v10_p)   ) deallocate(v10_p   )
  if(allocated(wspd_p)  ) deallocate(wspd_p  )
  if(allocated(xland_p) ) deallocate(xland_p )
+ if(allocated(vegfra_p)) deallocate(vegfra_p)
+ if(allocated(shdmax_p)) deallocate(shdmax_p)
  if(allocated(zol_p)   ) deallocate(zol_p   )
  if(allocated(znt_p)   ) deallocate(znt_p   )
- if(allocated(xice_p)  ) deallocate(xice_p  )
-      
+ ! DEBUG: keep xice_p allocated to avoid access-after-deallocate
+ ! if(allocated(xice_p)) deallocate(xice_p)
  if(config_frac_seaice) then
     if(allocated(sst_p)      ) deallocate(sst_p      )
 
@@ -424,6 +458,15 @@
           if(allocated(q10_sea)   ) deallocate(q10_sea    )
           if(allocated(pshltr_sea)) deallocate(pshltr_sea )
        endif
+
+    case("gfs_sfcl")
+       if(allocated(fh_p)) deallocate(fh_p)
+       if(allocated(fm_p)) deallocate(fm_p)
+       if(config_frac_seaice) then
+          if(allocated(fh_sea)) deallocate(fh_sea)
+          if(allocated(fm_sea)) deallocate(fm_sea)
+       endif
+
     case default
 
  end select sfclayer_select
@@ -451,12 +494,14 @@
 
  real(kind=RKIND),pointer:: len_disp
  real(kind=RKIND),dimension(:),pointer:: meshDensity
- real(kind=RKIND),dimension(:),pointer:: skintemp,sst,xice,xland
+ real(kind=RKIND),dimension(:),pointer:: skintemp,sst,xice,xland,vegfra,shdmax
  real(kind=RKIND),dimension(:),pointer:: hpbl,mavail
  real(kind=RKIND),dimension(:),pointer:: br,cpm,chs,chs2,cqs2,flhc,flqc,gz1oz0,hfx,qfx,  &
                                          qgh,qsfc,lh,mol,psim,psih,regime,rmol,ust,ustm, &
                                          wspd,znt,zol
  real(kind=RKIND),dimension(:),pointer:: cqs
+real(kind=RKIND),dimension(:),pointer:: q2,t2m,th2m,u10,v10
+real(kind=RKIND),dimension(:),pointer:: cd,cda,ck,cka
 
 !local pointers specific to monin_obukhov:
  real(kind=RKIND),dimension(:),pointer:: fh,fm
@@ -482,7 +527,10 @@
  call mpas_pool_get_array(diag_physics,'mavail'  ,mavail  )
  call mpas_pool_get_array(sfc_input   ,'skintemp',skintemp)
  call mpas_pool_get_array(sfc_input   ,'xland'   ,xland   )
+ call mpas_pool_get_array(sfc_input   ,'vegfra'  ,vegfra  )
+ call mpas_pool_get_array(sfc_input   ,'shdmax'  ,shdmax  )
  call mpas_pool_get_array(sfc_input   ,'xice'    ,xice    )
+
       
 !inout variables:
  call mpas_pool_get_array(diag_physics,'br'      ,br      )
@@ -509,6 +557,19 @@
  call mpas_pool_get_array(diag_physics,'znt'     ,znt     )
  call mpas_pool_get_array(diag_physics,'zol'     ,zol     )
 
+ ! Preserve existing near-surface diagnostics and exchange coefficients.
+ ! This is important for the gfs_sfcl bridge, which should not replace
+ ! model/LSM-provided values with artificial placeholders.
+ call mpas_pool_get_array(diag_physics,'q2'      ,q2      )
+ call mpas_pool_get_array(diag_physics,'t2m'     ,t2m     )
+ call mpas_pool_get_array(diag_physics,'th2m'    ,th2m    )
+ call mpas_pool_get_array(diag_physics,'u10'     ,u10     )
+ call mpas_pool_get_array(diag_physics,'v10'     ,v10     )
+ call mpas_pool_get_array(diag_physics,'cd'      ,cd      )
+ call mpas_pool_get_array(diag_physics,'cda'     ,cda     )
+ call mpas_pool_get_array(diag_physics,'ck'      ,ck      )
+ call mpas_pool_get_array(diag_physics,'cka'     ,cka     )
+
  do j = jts,jte
  do i = its,ite
     !input variables:
@@ -516,7 +577,9 @@
     hpbl_p(i,j)   = hpbl(i)
     mavail_p(i,j) = mavail(i)
     tsk_p(i,j)    = skintemp(i)
-    xland_p(i,j)  = xland(i)
+    tsk_p(i,j)    = skintemp(i)
+    vegfra_p(i,j) = vegfra(i)
+    shdmax_p(i,j) = shdmax(i)
     xice_p(i,j)   = xice(i)
       
     !inout variables:
@@ -544,17 +607,20 @@
     zol_p(i,j)    = zol(i)
 
     !output variables:
-    q2_p(i,j)     = 0._RKIND
-    t2m_p(i,j)    = 0._RKIND
-    th2m_p(i,j)   = 0._RKIND
-    u10_p(i,j)    = 0._RKIND
-    v10_p(i,j)    = 0._RKIND
+    ! Initialize from current MPAS/model state instead of zeroing.
+    ! Traditional MPAS surface-layer schemes overwrite these below, but
+    ! gfs_sfcl uses this branch as a bridge and must preserve valid values.
+    q2_p(i,j)     = q2(i)
+    t2m_p(i,j)    = t2m(i)
+    th2m_p(i,j)   = th2m(i)
+    u10_p(i,j)    = u10(i)
+    v10_p(i,j)    = v10(i)
 
     !output variables (optional):
-    cd_p(i,j)     = 0._RKIND
-    cda_p(i,j)    = 0._RKIND
-    ck_p(i,j)     = 0._RKIND
-    cka_p(i,j)    = 0._RKIND
+    cd_p(i,j)     = cd(i)
+    cda_p(i,j)    = cda(i)
+    ck_p(i,j)     = ck(i)
+    cka_p(i,j)    = cka(i)
     ustm_p(i,j)   = ustm(i)
  enddo
  enddo
@@ -606,7 +672,7 @@
        v10_sea(i,j)     = 0._RKIND
 
        !overwrite some local variables for sea-ice cells:
-       if(xice_p(i,j).ge.xice_threshold .and. xice_p(i,j).lt.1._RKIND) then
+       if(allocated(xice_p) .and. xice_p(i,j).ge.xice_threshold .and. xice_p(i,j).lt.1._RKIND) then
           xland_sea(i,j)  = 2._RKIND
           xland_p(i,j)    = 1._RKIND
           mavail_sea(i,j) = 1._RKIND
@@ -624,7 +690,7 @@
 
  sfclayer_select: select case (trim(sfclayer_scheme))
 
-    case("sf_monin_obukhov","sf_monin_obukhov_rev")
+    case("sf_monin_obukhov","sf_monin_obukhov_rev","gfs_sfcl")
        call mpas_pool_get_array(diag_physics,'fh',fh)
        call mpas_pool_get_array(diag_physics,'fm',fm)
 
@@ -929,7 +995,7 @@
 
  sfclayer_select: select case (trim(sfclayer_scheme))
 
-    case("sf_monin_obukhov","sf_monin_obukhov_rev")
+    case("sf_monin_obukhov","sf_monin_obukhov_rev","gfs_sfcl")
        call mpas_pool_get_array(diag_physics,'fh',fh)
        call mpas_pool_get_array(diag_physics,'fm',fm)
 
@@ -1066,13 +1132,14 @@
  logical, parameter:: allowed_to_read = .false. !actually not used in subroutine sfclayinit or mjysfcinit.
  character(len=StrKIND),pointer:: sfclayer_scheme
  logical, pointer:: config_do_restart
- real, pointer, dimension(:):: ust, z0, xland, xice
+ real, pointer, dimension(:):: ust, z0, xland, vegfra, shdmax, xice
  integer, pointer, dimension(:) :: lowlyr,ivgtyp
  integer :: i, j
 
 !CCPP-compliant flags:
  character(len=StrKIND):: errmsg
  integer:: errflg
+
 
 !-----------------------------------------------------------------------------------------------------------------
 
@@ -1095,6 +1162,17 @@
 
     case("sf_mynnsfclay")
        call mynnsfc_init(allowed_to_read,errmsg,errflg)
+    case("gfs_sfcl")
+       call mpas_pool_get_array(sfc_input, 'vegfra', vegfra)
+       call mpas_pool_get_array(sfc_input, 'shdmax', shdmax)
+       if (.not.allocated(vegfra_p) ) allocate(vegfra_p(ims:ime,jms:jme) )
+       if (.not.allocated(shdmax_p) ) allocate(shdmax_p(ims:ime,jms:jme) )
+       do j = jts,jte
+       do i = its,ite
+          vegfra_p(i,j)  = vegfra(i)
+          shdmax_p(i,j)  = shdmax(i)
+       enddo
+       enddo
        
     case("sf_myj") 
        call mpas_pool_get_config(configs,'config_do_restart'     ,config_do_restart )
@@ -1164,6 +1242,7 @@
  character(len=StrKIND),pointer:: lsm_scheme
  integer,pointer:: sf_mynn_sfcflux_land,sf_mynn_sfcflux_water
  real(kind=RKIND),dimension(:),pointer:: areaCell
+ integer,dimension(:),pointer:: ivgtyp_gfs_sfcl
 
 !local variables:
  integer:: initflag
@@ -1173,11 +1252,30 @@
  character(len=StrKIND):: errmsg
  integer:: errflg
 
+! Local work arrays for the gfs_sfcl bridge.
+ integer :: im_gfs, ii_gfs, i_gfs
+ integer, allocatable :: vegtype_gfs(:)
+ real(kind=RKIND), allocatable :: area_gfs(:), psfc_gfs(:), t1_gfs(:), q1_gfs(:)
+ real(kind=RKIND), allocatable :: z1_gfs(:), wspd_gfs(:), prsl1_gfs(:), prslki_gfs(:)
+ real(kind=RKIND), allocatable :: prsik1_gfs(:), prslk1_gfs(:), sigmaf_gfs(:)
+ real(kind=RKIND), allocatable :: xland_gfs(:), xice_gfs(:), znt_gfs(:), z0h_gfs(:), tsk_gfs(:)
+ real(kind=RKIND), allocatable :: u10_gfs(:), v10_gfs(:), fm_gfs(:), fh_gfs(:), cm_gfs(:), ch_gfs(:)
+ real(kind=RKIND), allocatable :: stress_gfs(:), rb_gfs(:), shdmax_gfs(:)
+ real(kind=RKIND) :: tv_gfs, rho_gfs, es_gfs, qsat_gfs, qsurf_gfs, wind_gfs, fac2_gfs
+ real(kind=RKIND), parameter :: eps_gfs = 0.622_RKIND
+ real(kind=RKIND), parameter :: epsm1_gfs = eps_gfs - 1.0_RKIND
+ real(kind=RKIND), parameter :: hvap_gfs = 2.5e6_RKIND
+
 !-----------------------------------------------------------------------------------------------------------------
 !call mpas_log_write('')
 !call mpas_log_write('--- enter subroutine driver_sfclayer:')
 
 !initialization of CCPP-compliant flags:
+ real(kind=RKIND), dimension(its:ite) :: vegfra_gfs_sfcl
+ real(kind=RKIND), dimension(its:ite) :: shdmax_gfs_sfcl
+ real(kind=RKIND), dimension(its:ite) :: znt_gfs_sfcl
+ real(kind=RKIND), dimension(its:ite) :: wspd_gfs_sfcl
+
  errmsg = ' '
  errflg = 0
 
@@ -1187,9 +1285,14 @@
  call mpas_pool_get_config(configs,'config_do_DAcycling'   ,config_do_DAcycling) 
       
  call mpas_pool_get_array(mesh,'areaCell',areaCell)
+ call mpas_pool_get_array(sfc_input   ,'ivgtyp',ivgtyp_gfs_sfcl)
 
 !copy all MPAS arrays to rectanguler grid:
  call sfclayer_from_MPAS(configs,mesh,diag_physics,sfc_input,its,ite)
+
+
+
+
 
  dx = sqrt(maxval(areaCell))
 
@@ -1512,17 +1615,447 @@
                           )
         endif
          call mpas_timer_stop('sf_myj')
-    case default
+
+    case("gfs_sfcl")
+       ! ---------------------------------------------------------------
+       ! Real GFS surface-layer bridge for MPAS.
+       !
+       ! Previous test code preserved stale MPAS diagnostics and still called
+       ! the NSST hook, which can drive land hfx/qfx to zero.  This branch now
+       ! calls the GFS sfc_diff wrapper using the actual MPAS model state and
+       ! then reconstructs diagnostic hfx, qfx, lh, t2m/q2/u10/v10 from the
+       ! returned exchange coefficients.
+       ! ---------------------------------------------------------------
+
+       im_gfs = ite - its + 1
+       allocate(area_gfs(im_gfs), psfc_gfs(im_gfs), t1_gfs(im_gfs), q1_gfs(im_gfs), z1_gfs(im_gfs), wspd_gfs(im_gfs))
+       allocate(prsl1_gfs(im_gfs), prslki_gfs(im_gfs), prsik1_gfs(im_gfs), prslk1_gfs(im_gfs), sigmaf_gfs(im_gfs))
+       allocate(xland_gfs(im_gfs), xice_gfs(im_gfs), znt_gfs(im_gfs), z0h_gfs(im_gfs), tsk_gfs(im_gfs))
+       allocate(u10_gfs(im_gfs), v10_gfs(im_gfs), fm_gfs(im_gfs), fh_gfs(im_gfs), cm_gfs(im_gfs), ch_gfs(im_gfs))
+       allocate(stress_gfs(im_gfs), rb_gfs(im_gfs), shdmax_gfs(im_gfs), vegtype_gfs(im_gfs))
+
+       do i_gfs = its, ite
+          ii_gfs = i_gfs - its + 1
+          area_gfs(ii_gfs)  = areaCell(i_gfs)
+          psfc_gfs(ii_gfs)  = max(psfc_p(i_gfs,jts), 10000.0_RKIND)
+          t1_gfs(ii_gfs)    = t_p(i_gfs,kts,jts)
+          q1_gfs(ii_gfs)    = max(qv_p(i_gfs,kts,jts), 1.0e-10_RKIND)
+          z1_gfs(ii_gfs)    = max(0.5_RKIND*dz_p(i_gfs,kts,jts), 2.0_RKIND)
+          wspd_gfs(ii_gfs)  = max(wspd_p(i_gfs,jts), 0.1_RKIND)
+
+          prsl1_gfs(ii_gfs) = max(pres_hyd_p(i_gfs,kts,jts), 10000.0_RKIND)
+          prslki_gfs(ii_gfs)= (prsl1_gfs(ii_gfs)/P0)**rcp
+          prsik1_gfs(ii_gfs)= (psfc_gfs(ii_gfs)/P0)**rcp
+          prslk1_gfs(ii_gfs)= prslki_gfs(ii_gfs)
+          sigmaf_gfs(ii_gfs)= min(1.0_RKIND, max(0.0_RKIND, vegfra_p(i_gfs,jts)/100.0_RKIND))
+
+          vegtype_gfs(ii_gfs) = ivgtyp_gfs_sfcl(i_gfs)
+          shdmax_gfs(ii_gfs)  = min(1.0_RKIND, max(0.0_RKIND, shdmax_p(i_gfs,jts)/100.0_RKIND))
+          xland_gfs(ii_gfs)   = xland_p(i_gfs,jts)
+          xice_gfs(ii_gfs)    = xice_p(i_gfs,jts)
+          znt_gfs(ii_gfs)     = max(znt_p(i_gfs,jts), 1.0e-4_RKIND)
+          z0h_gfs(ii_gfs)     = max(znt_p(i_gfs,jts), 1.0e-4_RKIND)
+          tsk_gfs(ii_gfs)     = tsk_p(i_gfs,jts)
+          u10_gfs(ii_gfs)     = u10_p(i_gfs,jts)
+          v10_gfs(ii_gfs)     = v10_p(i_gfs,jts)
+          fm_gfs(ii_gfs)      = max(fm_p(i_gfs,jts), 1.0e-6_RKIND)
+          fh_gfs(ii_gfs)      = max(fh_p(i_gfs,jts), 1.0e-6_RKIND)
+          cm_gfs(ii_gfs)      = max(cd_p(i_gfs,jts), 1.0e-8_RKIND)
+          ch_gfs(ii_gfs)      = max(ck_p(i_gfs,jts), 1.0e-8_RKIND)
+          stress_gfs(ii_gfs)  = max(ust_p(i_gfs,jts)*ust_p(i_gfs,jts), 1.0e-8_RKIND)
+          rb_gfs(ii_gfs)      = br_p(i_gfs,jts)
+       enddo
+
+       call mpas_call_sfc_diff(im_gfs, kte-kts+1, 1.0_RKIND, area_gfs, &
+                               psfc_gfs, t1_gfs, q1_gfs, z1_gfs, wspd_gfs, &
+                               prsl1_gfs, prslki_gfs, prsik1_gfs, prslk1_gfs, &
+                               sigmaf_gfs, vegtype_gfs, shdmax_gfs, 2, &
+                               xland_gfs, xice_gfs, &
+                               znt_gfs, z0h_gfs, tsk_gfs, u10_gfs, v10_gfs, &
+                               fm_gfs, fh_gfs, cm_gfs, ch_gfs, stress_gfs, rb_gfs, &
+                               errmsg, errflg)
+
+       if (errflg /= 0) then
+          call mpas_log_write('WARNING: GFS sfc_diff returned non-zero errflg in gfs_sfcl; keeping previous fields.')
+       else
+          do i_gfs = its, ite
+             ii_gfs = i_gfs - its + 1
+
+             znt_p(i_gfs,jts) = znt_gfs(ii_gfs)
+             cd_p(i_gfs,jts)  = cm_gfs(ii_gfs)
+             cda_p(i_gfs,jts) = cm_gfs(ii_gfs)
+             ck_p(i_gfs,jts)  = ch_gfs(ii_gfs)
+             cka_p(i_gfs,jts) = ch_gfs(ii_gfs)
+             chs_p(i_gfs,jts) = ch_gfs(ii_gfs)
+             chs2_p(i_gfs,jts)= ch_gfs(ii_gfs)
+             cqs2_p(i_gfs,jts)= ch_gfs(ii_gfs)
+             fm_p(i_gfs,jts)  = fm_gfs(ii_gfs)
+             fh_p(i_gfs,jts)  = fh_gfs(ii_gfs)
+             br_p(i_gfs,jts)  = rb_gfs(ii_gfs)
+             ust_p(i_gfs,jts) = sqrt(max(stress_gfs(ii_gfs), 1.0e-10_RKIND))
+             ustm_p(i_gfs,jts)= ust_p(i_gfs,jts)
+
+             wind_gfs = max(wspd_gfs(ii_gfs), 0.1_RKIND)
+             tv_gfs   = t1_gfs(ii_gfs) * (1.0_RKIND + 0.61_RKIND*q1_gfs(ii_gfs))
+             rho_gfs  = psfc_gfs(ii_gfs) / (R_d * max(tv_gfs, 180.0_RKIND))
+
+             es_gfs = 611.2_RKIND * exp(17.67_RKIND*(tsk_p(i_gfs,jts)-273.15_RKIND) / &
+                                      max(tsk_p(i_gfs,jts)-29.65_RKIND, 1.0_RKIND))
+             es_gfs = min(es_gfs, 0.98_RKIND*psfc_gfs(ii_gfs))
+             qsat_gfs = eps_gfs*es_gfs / (psfc_gfs(ii_gfs) + epsm1_gfs*es_gfs)
+
+             if (qsfc_p(i_gfs,jts) > 1.0e-8_RKIND) then
+                qsurf_gfs = qsfc_p(i_gfs,jts)
+             else
+                qsurf_gfs = qsat_gfs * max(0.05_RKIND, min(1.0_RKIND, mavail_p(i_gfs,jts)))
+                qsfc_p(i_gfs,jts) = qsurf_gfs
+             endif
+             qgh_p(i_gfs,jts) = qsurf_gfs
+
+             flhc_p(i_gfs,jts) = rho_gfs * cp * ch_gfs(ii_gfs) * wind_gfs
+             flqc_p(i_gfs,jts) = rho_gfs *      ch_gfs(ii_gfs) * wind_gfs
+             hfx_p(i_gfs,jts)  = flhc_p(i_gfs,jts) * (tsk_p(i_gfs,jts) - t1_gfs(ii_gfs))
+             qfx_p(i_gfs,jts)  = flqc_p(i_gfs,jts) * (qsurf_gfs - q1_gfs(ii_gfs))
+             lh_p(i_gfs,jts)   = hvap_gfs * qfx_p(i_gfs,jts)
+
+             ! Update 2-m shelter diagnostics in the gfs_sfcl bridge.
+             ! If we simply preserve the incoming MPAS diagnostic values, t2m/q2 can
+             ! become time-independent in the GFS-SFCL-only path because no native MPAS
+             ! sfclayer diagnostic routine is called for this branch.  Use the current
+             ! lowest-model-level state, current skin temperature, current qsurf, and the
+             ! GFS sfc_diff stability/exchange result to form an active bounded 2-m value.
+             ! This is intentionally diagnostic only; hfx/qfx remain owned by the flux
+             ! reconstruction above and NSST may overwrite wet-point fluxes later.
+             fac2_gfs = min(0.85_RKIND, max(0.05_RKIND, 2.0_RKIND/max(z1_gfs(ii_gfs),2.0_RKIND)))
+             if (fh_gfs(ii_gfs) < 1.0_RKIND) fac2_gfs = 0.5_RKIND * fac2_gfs
+
+             t2m_p(i_gfs,jts)  = t1_gfs(ii_gfs) + fac2_gfs*(tsk_p(i_gfs,jts)-t1_gfs(ii_gfs))
+             t2m_p(i_gfs,jts)  = min(max(t2m_p(i_gfs,jts), 180.0_RKIND), 340.0_RKIND)
+
+             q2_p(i_gfs,jts)   = q1_gfs(ii_gfs) + fac2_gfs*(qsurf_gfs-q1_gfs(ii_gfs))
+             q2_p(i_gfs,jts)   = min(max(q2_p(i_gfs,jts), 1.0e-10_RKIND), 0.08_RKIND)
+
+             th2m_p(i_gfs,jts) = t2m_p(i_gfs,jts) * (P0/psfc_gfs(ii_gfs))**rcp
+
+             u10_p(i_gfs,jts)  = u10_gfs(ii_gfs)
+             v10_p(i_gfs,jts)  = v10_gfs(ii_gfs)
+          enddo
+       endif
+
+       deallocate(area_gfs, psfc_gfs, t1_gfs, q1_gfs, z1_gfs, wspd_gfs)
+       deallocate(prsl1_gfs, prslki_gfs, prsik1_gfs, prslk1_gfs, sigmaf_gfs)
+       deallocate(xland_gfs, xice_gfs, znt_gfs, z0h_gfs, tsk_gfs)
+       deallocate(u10_gfs, v10_gfs, fm_gfs, fh_gfs, cm_gfs, ch_gfs)
+       deallocate(stress_gfs, rb_gfs, shdmax_gfs, vegtype_gfs)
+
+       ! Apply NSST only for wet/ocean points after GFS sfc_diff.
+       ! This keeps the reconstructed land hfx/qfx/t2m unchanged, while
+       ! allowing NSST to update SST/skin-temperature-related fields over water.
+       call driver_gfs_nsst_from_sfclayer(configs, mesh, diag_physics, sfc_input, its, ite, jts)
 
  end select sfclayer_select
 
 !copy local arrays to MPAS grid:
- call sfclayer_to_MPAS(configs,sfc_input,diag_physics,its,ite)
+
+
+ 
+  call sfclayer_to_MPAS(configs,sfc_input,diag_physics,its,ite)
+
+ 
+ 
+
+
 
 !call mpas_log_write('--- end subroutine driver_sfclayer.')
+
+
 
  end subroutine driver_sfclayer
 
 !=================================================================================================================
+
+!-----------------------------------------------------------------------
+! GFS/NSST bridge called only from case("gfs_sfcl").
+!
+! NOTE:
+! The exact NSST argument list may need adjustment to match your local
+! sfc_nst_* modules.  This wrapper is intentionally isolated here so
+! the main physics driver and other surface-layer schemes are untouched.
+!-----------------------------------------------------------------------
+subroutine driver_gfs_nsst_from_sfclayer(configs, mesh, diag_physics, sfc_input, its, ite, jts)
+   use mpas_pool_routines
+   use mpas_kind_types
+   use mpas_gfs_nst_wrapper, only : mpas_nst_pre, mpas_nst_main, mpas_nst_post
+   use, intrinsic :: ieee_arithmetic
+   use, intrinsic :: ieee_exceptions
+   implicit none
+
+   include 'mpif.h'
+   type(mpas_pool_type), intent(in) :: configs, mesh, diag_physics, sfc_input
+   integer, intent(in) :: its, ite, jts
+   integer :: im_nst, i, ii, nthreads_nst, errflg_nst
+   integer :: nwet_nst
+   integer :: myrank_nst, mpi_ierr_nst
+   integer :: nst_bad_count
+   real(kind=RKIND) :: tgice_scalar_nst
+   real(kind=RKIND), parameter :: hvap_nst_local = 2.5e6_RKIND
+   character(len=256) :: errmsg_nst
+   logical :: cplflx_nst
+   logical :: old_invalid_halting
+   logical, allocatable :: wet_nst(:)
+   real(kind=RKIND), allocatable :: tgice_nst(:), tsfco_nst(:), tsurf_wat_nst(:), tseal_nst(:)
+   real(kind=RKIND), allocatable :: xt_nst(:), xz_nst(:), dt_cool_nst(:), z_c_nst(:), tref_nst(:)
+   real(kind=RKIND), allocatable :: oceanfrac_nst(:), hfx_nst(:), qfx_nst(:), lh_nst(:)
+   real(kind=RKIND), allocatable :: ps_nst(:), t1_nst(:), q1_nst(:)
+   real(kind=RKIND), allocatable :: wind_nst(:), cm_nst(:), ch_nst(:)
+   real(kind=RKIND) :: timestep_nst
+   real(kind=RKIND) :: tv_nst_flux, rho_nst_flux
+   real(kind=RKIND) :: es_nst_diag, qsat_nst_diag, fac2_nst_diag
+   real(kind=RKIND), parameter :: eps_nst_diag = 0.622_RKIND
+   real(kind=RKIND), parameter :: epsm1_nst_diag = eps_nst_diag - 1.0_RKIND
+
+   im_nst = ite - its + 1
+   nthreads_nst = 1
+   cplflx_nst = .false.
+   errflg_nst = 0
+   errmsg_nst = ''
+   myrank_nst = -1
+   mpi_ierr_nst = 0
+   call MPI_Comm_rank(MPI_COMM_WORLD, myrank_nst, mpi_ierr_nst)
+   tgice_scalar_nst = 273.15_RKIND
+   allocate(wet_nst(im_nst), tgice_nst(im_nst), tsfco_nst(im_nst), tsurf_wat_nst(im_nst), tseal_nst(im_nst))
+   allocate(xt_nst(im_nst), xz_nst(im_nst), dt_cool_nst(im_nst), z_c_nst(im_nst), tref_nst(im_nst))
+   allocate(oceanfrac_nst(im_nst), hfx_nst(im_nst), qfx_nst(im_nst), lh_nst(im_nst))
+   allocate(ps_nst(im_nst), t1_nst(im_nst), q1_nst(im_nst))
+   allocate(wind_nst(im_nst), cm_nst(im_nst), ch_nst(im_nst))
+
+   
+
+   ! NST LOCAL SAFE INIT BLOCK
+   wet_nst(:)       = .false.
+   tgice_nst(:)     = 273.15_RKIND
+   tsfco_nst(:)     = 300.0_RKIND
+   tsurf_wat_nst(:) = 300.0_RKIND
+   tseal_nst(:)     = 300.0_RKIND
+   xt_nst(:)        = 0.0_RKIND
+   xz_nst(:)        = 0.0_RKIND
+   dt_cool_nst(:)   = 0.0_RKIND
+   z_c_nst(:)       = 0.0_RKIND
+   tref_nst(:)      = 300.0_RKIND
+   oceanfrac_nst(:) = 0.0_RKIND
+   hfx_nst(:)       = 0.0_RKIND
+   qfx_nst(:)       = 0.0_RKIND
+   lh_nst(:)        = 0.0_RKIND
+   ps_nst(:)        = 100000.0_RKIND
+   t1_nst(:)        = 300.0_RKIND
+   q1_nst(:)        = 1.0e-8_RKIND
+   wind_nst(:)      = 1.0_RKIND
+   cm_nst(:)        = 1.0e-6_RKIND
+   ch_nst(:)        = 1.0e-6_RKIND
+
+   timestep_nst = 1.0_RKIND
+
+   if (size(wet_nst) /= im_nst .or. size(tsfco_nst) /= im_nst .or. &
+       size(tsurf_wat_nst) /= im_nst .or. size(tseal_nst) /= im_nst .or. &
+       size(xt_nst) /= im_nst .or. size(xz_nst) /= im_nst .or. &
+       size(dt_cool_nst) /= im_nst .or. size(z_c_nst) /= im_nst .or. &
+       size(tref_nst) /= im_nst .or. size(oceanfrac_nst) /= im_nst .or. &
+       size(hfx_nst) /= im_nst .or. size(qfx_nst) /= im_nst .or. &
+       size(lh_nst) /= im_nst .or. size(ps_nst) /= im_nst .or. &
+       size(t1_nst) /= im_nst .or. size(q1_nst) /= im_nst .or. &
+       size(wind_nst) /= im_nst .or. size(cm_nst) /= im_nst .or. &
+       size(ch_nst) /= im_nst) then
+      write(0,*) 'NST SIZE MISMATCH FATAL: rank=', myrank_nst
+      stop
+   endif
+
+   do i = its, ite
+      ii = i - its + 1
+      ! MPAS xland convention here: 1 = land, 2 = water/ocean.
+      wet_nst(ii) = (xland_p(i,jts) >= 1.5_RKIND)
+      tgice_nst(ii) = 273.15_RKIND
+      tsfco_nst(ii) = tsk_p(i,jts)
+      tsurf_wat_nst(ii) = tsk_p(i,jts)
+      tseal_nst(ii) = tsk_p(i,jts)
+      xt_nst(ii)=0.0_RKIND; xz_nst(ii)=0.0_RKIND; dt_cool_nst(ii)=0.0_RKIND; z_c_nst(ii)=0.0_RKIND
+      tref_nst(ii)=tsk_p(i,jts)
+      oceanfrac_nst(ii) = merge(1.0_RKIND, 0.0_RKIND, wet_nst(ii))
+      hfx_nst(ii)=hfx_p(i,jts); qfx_nst(ii)=qfx_p(i,jts)
+      if (allocated(lh_p)) then
+         if (allocated(lh_p)) then
+         lh_nst(ii) = lh_p(i,jts)
+      else
+         lh_nst(ii) = 0.0_RKIND
+      endif
+      else
+         lh_nst(ii)=0.0_RKIND
+      endif
+      ps_nst(ii)=psfc_p(i,jts)
+      t1_nst(ii)=t_p(i,kts,jts)
+      q1_nst(ii)=qv_p(i,kts,jts)
+      wind_nst(ii)=max(wspd_p(i,jts),1.0_RKIND)
+      cm_nst(ii)=max(cd_p(i,jts),1.0e-6_RKIND)
+      if (allocated(ck_p)) then
+         ch_nst(ii)=max(ck_p(i,jts),1.0e-6_RKIND)
+      else
+         ch_nst(ii)=1.0e-6_RKIND
+      endif
+   enddo
+
+   do i = 1, im_nst
+      if (ps_nst(i) /= ps_nst(i) .or. t1_nst(i) /= t1_nst(i) .or. &
+          q1_nst(i) /= q1_nst(i) .or. wind_nst(i) /= wind_nst(i) .or. &
+          ps_nst(i) <= 0.0_RKIND .or. t1_nst(i) <= 100.0_RKIND) then
+         ps_nst(i) = max(ps_nst(i), 10000.0_RKIND)
+         t1_nst(i) = max(t1_nst(i), 180.0_RKIND)
+         q1_nst(i) = max(q1_nst(i), 0.0_RKIND)
+         wind_nst(i) = max(wind_nst(i), 1.0_RKIND)
+      endif
+   enddo
+
+   
+   nst_bad_count = 0
+   do i = 1, im_nst
+      if (ps_nst(i) /= ps_nst(i) .or. t1_nst(i) /= t1_nst(i) .or. &
+          q1_nst(i) /= q1_nst(i) .or. wind_nst(i) /= wind_nst(i) .or. &
+          hfx_nst(i) /= hfx_nst(i) .or. qfx_nst(i) /= qfx_nst(i) .or. &
+          lh_nst(i) /= lh_nst(i) .or. tsfco_nst(i) /= tsfco_nst(i) .or. &
+          tsurf_wat_nst(i) /= tsurf_wat_nst(i) .or. tseal_nst(i) /= tseal_nst(i)) then
+         nst_bad_count = nst_bad_count + 1
+         if (nst_bad_count <= 5) then
+            write(0,*) 'NST NAN BEFORE PRE: rank=', myrank_nst, &
+                       ' h/q/lh=', hfx_nst(i), qfx_nst(i), lh_nst(i), &
+                       ' ts=', tsfco_nst(i), tsurf_wat_nst(i), tseal_nst(i)
+         endif
+      endif
+   enddo
+
+
+   
+   ! NST LOCAL NAN GUARD BLOCK
+   do ii = 1, im_nst
+      if (tgice_nst(ii) /= tgice_nst(ii)) tgice_nst(ii) = 273.15_RKIND
+      if (tsfco_nst(ii) /= tsfco_nst(ii) .or. tsfco_nst(ii) < 180.0_RKIND) tsfco_nst(ii) = 300.0_RKIND
+      if (tsurf_wat_nst(ii) /= tsurf_wat_nst(ii) .or. tsurf_wat_nst(ii) < 180.0_RKIND) tsurf_wat_nst(ii) = tsfco_nst(ii)
+      if (tseal_nst(ii) /= tseal_nst(ii) .or. tseal_nst(ii) < 180.0_RKIND) tseal_nst(ii) = tsfco_nst(ii)
+      if (tref_nst(ii) /= tref_nst(ii) .or. tref_nst(ii) < 180.0_RKIND) tref_nst(ii) = tsfco_nst(ii)
+      if (ps_nst(ii) /= ps_nst(ii) .or. ps_nst(ii) < 10000.0_RKIND) ps_nst(ii) = 100000.0_RKIND
+      if (t1_nst(ii) /= t1_nst(ii) .or. t1_nst(ii) < 180.0_RKIND) t1_nst(ii) = 300.0_RKIND
+      if (q1_nst(ii) /= q1_nst(ii) .or. q1_nst(ii) < 0.0_RKIND) q1_nst(ii) = 1.0e-8_RKIND
+      if (wind_nst(ii) /= wind_nst(ii) .or. wind_nst(ii) < 0.1_RKIND) wind_nst(ii) = 1.0_RKIND
+      if (cm_nst(ii) /= cm_nst(ii) .or. cm_nst(ii) < 1.0e-8_RKIND) cm_nst(ii) = 1.0e-6_RKIND
+      if (ch_nst(ii) /= ch_nst(ii) .or. ch_nst(ii) < 1.0e-8_RKIND) ch_nst(ii) = 1.0e-6_RKIND
+      if (hfx_nst(ii) /= hfx_nst(ii)) hfx_nst(ii) = 0.0_RKIND
+      if (qfx_nst(ii) /= qfx_nst(ii)) qfx_nst(ii) = 0.0_RKIND
+      if (lh_nst(ii)  /= lh_nst(ii))  lh_nst(ii)  = 0.0_RKIND
+      if (oceanfrac_nst(ii) /= oceanfrac_nst(ii)) oceanfrac_nst(ii) = 0.0_RKIND
+      oceanfrac_nst(ii) = min(1.0_RKIND, max(0.0_RKIND, oceanfrac_nst(ii)))
+   enddo
+
+
+   
+   ! NST FPE STRICT CLAMP BLOCK
+   nwet_nst = 0
+   do ii = 1, im_nst
+      if (oceanfrac_nst(ii) > 0.0_RKIND .and. wet_nst(ii)) nwet_nst = nwet_nst + 1
+
+      ps_nst(ii)        = min(110000.0_RKIND, max(50000.0_RKIND, ps_nst(ii)))
+      t1_nst(ii)        = min(330.0_RKIND,    max(180.0_RKIND,   t1_nst(ii)))
+      tsfco_nst(ii)     = min(330.0_RKIND,    max(180.0_RKIND,   tsfco_nst(ii)))
+      tsurf_wat_nst(ii) = min(330.0_RKIND,    max(180.0_RKIND,   tsurf_wat_nst(ii)))
+      tseal_nst(ii)     = min(330.0_RKIND,    max(180.0_RKIND,   tseal_nst(ii)))
+      tref_nst(ii)      = min(330.0_RKIND,    max(180.0_RKIND,   tref_nst(ii)))
+
+      q1_nst(ii)        = min(0.05_RKIND,     max(1.0e-10_RKIND, q1_nst(ii)))
+      wind_nst(ii)      = min(100.0_RKIND,    max(0.1_RKIND,     wind_nst(ii)))
+      cm_nst(ii)        = min(0.1_RKIND,      max(1.0e-8_RKIND,  cm_nst(ii)))
+      ch_nst(ii)        = min(0.1_RKIND,      max(1.0e-8_RKIND,  ch_nst(ii)))
+
+      xt_nst(ii)        = 0.0_RKIND
+      xz_nst(ii)        = 0.0_RKIND
+      dt_cool_nst(ii)   = 0.0_RKIND
+      z_c_nst(ii)       = 0.0_RKIND
+      oceanfrac_nst(ii) = min(1.0_RKIND, max(0.0_RKIND, oceanfrac_nst(ii)))
+   enddo
+
+   if (nwet_nst <= 0) then
+      ! No wet/ocean points on this row: do not call NSST and do not overwrite
+      ! the land fluxes reconstructed by the GFS surface-layer path.
+      deallocate(wet_nst, tgice_nst, tsfco_nst, tsurf_wat_nst, tseal_nst)
+      deallocate(xt_nst, xz_nst, dt_cool_nst, z_c_nst, tref_nst)
+      deallocate(oceanfrac_nst, hfx_nst, qfx_nst, lh_nst)
+      deallocate(ps_nst, t1_nst, q1_nst, wind_nst, cm_nst, ch_nst)
+      return
+   endif
+
+   ! NST temporarily disable invalid halting under -fpe0 around legacy NSST math
+
+
+   call mpas_nst_pre(im_nst, wet_nst, tgice_scalar_nst, tsfco_nst, tsurf_wat_nst, tseal_nst, &
+                     xt_nst, xz_nst, dt_cool_nst, z_c_nst, tref_nst, cplflx_nst, &
+                     oceanfrac_nst, nthreads_nst, errmsg_nst, errflg_nst)
+
+   call mpas_nst_main(im_nst, hfx_nst, qfx_nst, lh_nst, tsurf_wat_nst, oceanfrac_nst, &
+                     ps_nst, t1_nst, q1_nst, wind_nst, cm_nst, ch_nst, timestep_nst, &
+                     errmsg_nst, errflg_nst)
+
+   
+   ! Do not sanitize or overwrite NST output here.
+   ! For wet/ocean points, pass the fluxes returned by NSST directly
+   ! back to MPAS/PBL below. This preserves the NSST-computed hfx/qfx/lh.
+
+   call mpas_nst_post(im_nst, wet_nst, tsfco_nst, tsurf_wat_nst, tseal_nst, tref_nst, oceanfrac_nst, errmsg_nst, errflg_nst)
+
+
+   do i = its, ite
+      ii = i - its + 1
+
+      if (wet_nst(ii)) then
+         ! Only wet/ocean points receive NSST-updated fluxes and skin temperature.
+         ! IMPORTANT: sfc_nst_combined returns GFS internal/kinematic fluxes:
+         !   hfx_nst = hflx/(rho*cp)   [K m s-1]
+         !   qfx_nst = evap/(rho*hvap) [kg kg-1 m s-1]
+         ! MPAS diag_physics/PBL expect:
+         !   hfx_p   [W m-2]
+         !   qfx_p   [kg m-2 s-1]
+         !   lh_p    [W m-2]
+         ! Convert back here before passing fluxes to PBL/history.
+         tv_nst_flux  = max(t1_nst(ii) * (1.0_RKIND + 0.61_RKIND*max(q1_nst(ii),0.0_RKIND)), 180.0_RKIND)
+         rho_nst_flux = ps_nst(ii) / (R_d * tv_nst_flux)
+
+         hfx_p(i,jts) = rho_nst_flux * cp             * hfx_nst(ii)
+         qfx_p(i,jts) = rho_nst_flux                  * qfx_nst(ii)
+         if (allocated(lh_p)) lh_p(i,jts) = rho_nst_flux * hvap_nst_local * qfx_nst(ii)
+
+         ! Limit only catastrophic values; do not zero normal negative ocean fluxes.
+         hfx_p(i,jts) = min(max(hfx_p(i,jts), -1000.0_RKIND), 1000.0_RKIND)
+         qfx_p(i,jts) = min(max(qfx_p(i,jts), -5.0e-4_RKIND), 5.0e-4_RKIND)
+         if (allocated(lh_p)) lh_p(i,jts) = hvap_nst_local * qfx_p(i,jts)
+
+         tsk_p(i,jts) = tsfco_nst(ii)
+
+         ! After NSST updates the wet-point skin temperature, refresh the 2-m
+         ! diagnostics over water too.  Otherwise t2m/q2 can remain the stale
+         ! values copied in before the gfs_sfcl branch.
+         es_nst_diag = 611.2_RKIND * exp(17.67_RKIND*(tsk_p(i,jts)-273.15_RKIND) / &
+                                      max(tsk_p(i,jts)-29.65_RKIND, 1.0_RKIND))
+         es_nst_diag = min(es_nst_diag, 0.98_RKIND*ps_nst(ii))
+         qsat_nst_diag = eps_nst_diag*es_nst_diag / (ps_nst(ii) + epsm1_nst_diag*es_nst_diag)
+
+         fac2_nst_diag = min(0.85_RKIND, max(0.05_RKIND, 2.0_RKIND/10.0_RKIND))
+         t2m_p(i,jts)  = t1_nst(ii) + fac2_nst_diag*(tsk_p(i,jts)-t1_nst(ii))
+         t2m_p(i,jts)  = min(max(t2m_p(i,jts), 180.0_RKIND), 340.0_RKIND)
+         q2_p(i,jts)   = q1_nst(ii) + fac2_nst_diag*(qsat_nst_diag-q1_nst(ii))
+         q2_p(i,jts)   = min(max(q2_p(i,jts), 1.0e-10_RKIND), 0.08_RKIND)
+         th2m_p(i,jts) = t2m_p(i,jts) * (P0/ps_nst(ii))**rcp
+      endif
+   enddo
+
+   
+   deallocate(wet_nst, tgice_nst, tsfco_nst, tsurf_wat_nst, tseal_nst)
+   deallocate(xt_nst, xz_nst, dt_cool_nst, z_c_nst, tref_nst)
+   deallocate(oceanfrac_nst, hfx_nst, qfx_nst, lh_nst)
+   deallocate(ps_nst, t1_nst, q1_nst, wind_nst, cm_nst, ch_nst)
+end subroutine driver_gfs_nsst_from_sfclayer
  end module mpas_atmphys_driver_sfclayer
 !=================================================================================================================
