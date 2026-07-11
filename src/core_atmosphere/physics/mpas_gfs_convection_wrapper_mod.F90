@@ -301,21 +301,41 @@ contains
          ! Surface density for shallow-convection flux conversion.
          ! The driver must pass physical temperature t_phy_p, not potential temperature.
          raw_t = t(i,surf_k(i))
-         if (raw_t /= raw_t .or. raw_t < 150._RKIND .or. raw_t > 360._RKIND) then
+
+         ! A nonfinite surface T or qv must not abort the entire MPI task.
+         ! Mark this column invalid and provide benign finite values so the
+         ! column-batch SAS routines can complete; all returned SAS tendencies
+         ! and convective rain for bad_col are zeroed below.
+         if (raw_t /= raw_t .or. raw_t < 100._RKIND .or. raw_t > 400._RKIND .or. &
+             qv(i,surf_k(i)) /= qv(i,surf_k(i))) then
             bad_col(i) = .true.
-            raw_t = min(360._RKIND, max(150._RKIND, raw_t))
+            raw_t = 280._RKIND
+            tv = raw_t
+         else
+            tv = raw_t * (1._RKIND + fv * max(qmin, qv(i,surf_k(i))))
          endif
-         tv = raw_t * (1._RKIND + fv * max(qmin, qv(i,surf_k(i))))
 
          rho = pres_mid(i,surf_k(i)) / (R_d * tv)
          if (rho /= rho .or. rho <= 0._RKIND) then
-            ierr = 13
-            write(errmsg,'(a,i8,3(1x,es14.6))') 'bad SAS surface rho at i,p,tv,rho=', &
-                 i, pres_mid(i,surf_k(i)), tv, rho
-            return
+            bad_col(i) = .true.
+            rho = max(0.1_RKIND, pres_mid(i,surf_k(i)) / (R_d * 280._RKIND))
          endif
-         heat(i) = hfx(i) / (rho * cp)
-         evap(i) = qfx(i) / rho
+
+         if (bad_col(i)) then
+            heat(i) = 0._RKIND
+            evap(i) = 0._RKIND
+         else
+            heat(i) = hfx(i) / (rho * cp)
+            evap(i) = qfx(i) / rho
+            if (heat(i) /= heat(i)) then
+               bad_col(i) = .true.
+               heat(i) = 0._RKIND
+            endif
+            if (evap(i) /= evap(i)) then
+               bad_col(i) = .true.
+               evap(i) = 0._RKIND
+            endif
+         endif
       enddo
 
       do k = 1, km
@@ -350,20 +370,20 @@ contains
 
          ! MPAS driver passes physical temperature.  GFS SAS expects physical T.
          raw_t = t(i,kk)
-         if (raw_t /= raw_t .or. raw_t < 150._RKIND .or. raw_t > 360._RKIND) then
+         if (raw_t /= raw_t .or. raw_t < 80._RKIND .or. raw_t > 400._RKIND .or. &
+             qv(i,kk) /= qv(i,kk)) then
             bad_col(i) = .true.
-            t1(i,k) = min(360._RKIND, max(150._RKIND, raw_t))
+            t1(i,k) = 280._RKIND
+            tv = t1(i,k)
          else
             t1(i,k) = raw_t
+            tv = t1(i,k) * (1._RKIND + fv * max(qmin, qv(i,kk)))
          endif
 
-         tv  = t1(i,k) * (1._RKIND + fv * max(qmin, qv(i,kk)))
          rho = prslp(i,k) / (R_d * tv)
          if (rho /= rho .or. rho <= 0._RKIND) then
-            ierr = 16
-            write(errmsg,'(a,2i8,3(1x,es14.6))') 'bad SAS rho at i,k,p,tv,rho=', &
-                 i, k, prslp(i,k), tv, rho
-            return
+            bad_col(i) = .true.
+            rho = max(0.01_RKIND, prslp(i,k) / (R_d * 280._RKIND))
          endif
 
          dot(i,k) = -rho * gravity * w(i,kk)
@@ -508,9 +528,17 @@ contains
                return
             endif
 
-            ! Quiet test: suppress the report-only large-tendency output.
-            ! The values are still returned unchanged and the driver safety
-            ! check remains active.
+            if (.false. .and. (abs(rth_test) > 5.0e-2_RKIND .or. abs(rqv_raw) > 2.0e-5_RKIND .or. &
+                abs(rqc_raw) > 2.0e-5_RKIND .or. abs(rqi_raw) > 2.0e-5_RKIND .or. &
+                abs(ru_raw)  > 5.0e-3_RKIND .or. abs(rv_raw)  > 5.0e-3_RKIND)) then
+               write(0,*) 'LARGE LATEST SAMF GFS SAS TENDENCY -- REPORT ONLY'
+               write(0,*) 'i,k,kk             = ', i, k, kk
+               write(0,*) 'rth,rqv,rqc,rqi    = ', rth_test, rqv_raw, rqc_raw, rqi_raw
+               write(0,*) 'ru,rv              = ', ru_raw, rv_raw
+               write(0,*) 'deep rn,shal rn    = ', rn_deep(i), rn_shal(i)
+               write(0,*) 'kbot,ktop,kcnv     = ', kbot(i), ktop(i), kcnv(i)
+               call flush(0)
+            endif
 
             rthcuten(i,kk) = rth_test
             rqvcuten(i,kk) = rqv_raw

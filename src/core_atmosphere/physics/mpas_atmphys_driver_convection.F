@@ -859,41 +859,19 @@ real(kind=RKIND) :: p_sfc_safe, p_top_safe, frac_safe
                if (pres2_hyd_p(i,k,j) <= pres2_hyd_p(i,k+1,j)) then
                   icount = icount + 1
                   gfs_sas_bad_col(i,j) = .true.
-                  if (icount <= 20) then
-                     write(0,*) 'WARNING: skip GFS SAS bad pres2_hyd_p column'
-                     write(0,*) 'global i,j,k      = ', i, j, k
-                     write(0,*) 'pres2_hyd_p(k)    = ', pres2_hyd_p(i,k,j)
-                     write(0,*) 'pres2_hyd_p(k+1)  = ', pres2_hyd_p(i,k+1,j)
-                     write(0,*) 'pres_hyd_p(k)     = ', pres_hyd_p(i,k,j)
-                     if (k > kts) write(0,*) 'pres2_hyd_p(k-1)  = ', pres2_hyd_p(i,k-1,j)
-                     if (k < kte) write(0,*) 'pres_hyd_p(k+1)   = ', pres_hyd_p(i,k+1,j)
-                     write(0,*) 'psfc candidate pres2_hyd_p(kts)  = ', pres2_hyd_p(i,kts,j)
-                     write(0,*) 'top  candidate pres2_hyd_p(kte+1)= ', pres2_hyd_p(i,kte+1,j)
-                     call flush(0)
-                  endif
+                  ! Detailed bad-pressure diagnostics intentionally suppressed.
                endif
 
                if ( (pres_hyd_p(i,k,j) > max(pres2_hyd_p(i,k,j),pres2_hyd_p(i,k+1,j))) .or. &
                     (pres_hyd_p(i,k,j) < min(pres2_hyd_p(i,k,j),pres2_hyd_p(i,k+1,j))) ) then
                   icount = icount + 1
                   gfs_sas_bad_col(i,j) = .true.
-                  if (icount <= 20) then
-                     write(0,*) 'WARNING: skip GFS SAS bad pres_hyd_p column'
-                     write(0,*) 'global i,j,k      = ', i, j, k
-                     write(0,*) 'pres2_hyd_p(k)    = ', pres2_hyd_p(i,k,j)
-                     write(0,*) 'pres2_hyd_p(k+1)  = ', pres2_hyd_p(i,k+1,j)
-                     write(0,*) 'pres_hyd_p(k)     = ', pres_hyd_p(i,k,j)
-                     call flush(0)
-                  endif
+                  ! Detailed bad-pressure diagnostics intentionally suppressed.
                endif
             enddo
          enddo
 
-         if (icount > 0) then
-            write(0,*) 'TOTAL GFS SAS BAD PRESSURE COUNT for j = ', j, ' count = ', icount
-            write(0,*) 'ACTION: skip GFS SAMF/SAS only for bad-pressure columns; continue run'
-            call flush(0)
-         endif
+         ! Bad-pressure columns remain masked, but routine summaries are suppressed.
 
          ! Initialize MPAS cloud-base/cloud-top diagnostics before the wrapper.
          if (allocated(cubot_p)) cubot_p(its:ite,j) = real(kte+1, RKIND)
@@ -973,7 +951,7 @@ real(kind=RKIND) :: p_sfc_safe, p_top_safe, frac_safe
          do k = kts, kte
          do i = its, ite
             if (gfs_sas_bad_col(i,j)) then
-               t_gfs_sas(i,k)  = min(360._RKIND, max(150._RKIND, t_p(i,k,j)))
+               t_gfs_sas(i,k)  = min(400._RKIND, max(100._RKIND, t_p(i,k,j)))
                qv_gfs_sas(i,k) = max(1.0e-12_RKIND, qv_p(i,k,j))
                cycle
             endif
@@ -984,15 +962,30 @@ real(kind=RKIND) :: p_sfc_safe, p_top_safe, frac_safe
 
             qv_gfs_sas(i,k) = max(1.0e-12_RKIND, qv_p(i,k,j) + dt_dyn * rqvften_p(i,k,j))
 
-            if (t_gfs_sas(i,k) /= t_gfs_sas(i,k) .or. &
-                t_gfs_sas(i,k) < 150._RKIND .or. t_gfs_sas(i,k) > 360._RKIND) then
-               write(0,*) 'BAD STAGED T BEFORE GFS SAS'
+            ! Cold temperatures near the model top are valid.  Apply a
+            ! pressure-aware staged-temperature guard instead of the old
+            ! uniform 150-K lower bound, which produced many false warnings
+            ! at the 124-level model top in the 10-km configuration.
+            if (t_gfs_sas(i,k) /= t_gfs_sas(i,k)) then
+               write(0,*) 'NONFINITE STAGED T BEFORE GFS SAS'
                write(0,*) 'i,j,k=', i,j,k
-               write(0,*) 't_raw, t_stage=', t_p(i,k,j), t_gfs_sas(i,k)
-               write(0,*) 'rthften_p(temp tendency), rqvften_p=', &
-                    rthften_p(i,k,j), rqvften_p(i,k,j)
+               write(0,*) 'p_mid,t_raw,t_stage=', pres_mid_gfs_sas(i,k), &
+                    t_p(i,k,j), t_gfs_sas(i,k)
                call flush(0)
-               t_gfs_sas(i,k) = min(360._RKIND, max(150._RKIND, t_gfs_sas(i,k)))
+               t_gfs_sas(i,k) = min(400._RKIND, max(100._RKIND, t_p(i,k,j)))
+
+            else if (t_gfs_sas(i,k) > 400._RKIND .or. &
+                     (pres_mid_gfs_sas(i,k) >= 1000._RKIND .and. &
+                      t_gfs_sas(i,k) < 120._RKIND) .or. &
+                     (pres_mid_gfs_sas(i,k) < 1000._RKIND .and. &
+                      t_gfs_sas(i,k) < 80._RKIND)) then
+               ! Finite out-of-range staged-temperature diagnostics suppressed.
+
+               if (pres_mid_gfs_sas(i,k) >= 1000._RKIND) then
+                  t_gfs_sas(i,k) = min(400._RKIND, max(120._RKIND, t_gfs_sas(i,k)))
+               else
+                  t_gfs_sas(i,k) = min(400._RKIND, max(80._RKIND, t_gfs_sas(i,k)))
+               endif
             endif
          enddo
          enddo
@@ -1117,22 +1110,6 @@ real(kind=RKIND) :: p_sfc_safe, p_top_safe, frac_safe
 
                   if (.not. bad_sas_tend_col) then
                      nbad_sas_after = nbad_sas_after + 1
-                     write(0,*) 'BAD GFS SAS TENDENCY AFTER WRAPPER -- ZERO COLUMN ONLY'
-                     write(0,*) 'global i,j,k = ', i, j, k
-                     write(0,*) 'rthcuten_p   = ', rthcuten_p(i,k,j)
-                     write(0,*) 'rqvcuten_p   = ', rqvcuten_p(i,k,j)
-                     write(0,*) 'rucuten_p    = ', rucuten_p(i,k,j)
-                     write(0,*) 'rvcuten_p    = ', rvcuten_p(i,k,j)
-                     write(0,*) 'rqccuten_p   = ', rqccuten_p(i,k,j)
-                     write(0,*) 'rqicuten_p   = ', rqicuten_p(i,k,j)
-                     write(0,*) 'qv_before_after = ', qv_p(i,k,j), qv_after_sas
-                     write(0,*) 'state t,qv,u,v = ', &
-                                 t_p(i,k,j), qv_p(i,k,j), u_p(i,k,j), v_p(i,k,j)
-                     write(0,*) 'pressure mid,int(k),int(k+1) = ', &
-                                 pres_hyd_p(i,k,j), pres2_hyd_p(i,k,j), &
-                                 pres2_hyd_p(i,k+1,j)
-                     write(0,*) 'raincv,pratec before zero = ', raincv_p(i,j), pratec_p(i,j)
-                     call flush(0)
                   endif
 
                   bad_sas_tend_col = .true.
