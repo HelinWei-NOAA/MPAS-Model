@@ -1184,6 +1184,7 @@
 
 !local variables:
  integer:: initflag
+ integer:: i, j
  real(kind=RKIND):: dx
 
 !CCPP-compliant flags:
@@ -1348,7 +1349,8 @@
                   rovcp    = rcp    , R     = R_d       , xlv            = xlv      , &
                   psfc     = psfc_p , chs   = chs_p     , chs2           = chs2_p   , &
                   cqs2     = cqs2_p , cpm   = cpm_p     , znt            = znt_p    , &
-                  ust      = ust_p  , psim  = fm_p      , psih           = fh_p     , &
+                  ust      = ust_p  , psim  = psim_p    , psih           = psih_p   , &
+                  fmout    = fm_p   , fhout = fh_p       , &
                   xland    = xland_p, hfx   = hfx_p     , qfx            = qfx_p    , &
                   lh       = lh_p   , tsk   = tsk_p     , flhc           = flhc_p   , &
                   flqc     = flqc_p , qgh   = qgh_p     , qsfc           = qsfc_p   , &
@@ -1361,6 +1363,16 @@
                   its = its , ite = ite , jts = jts , jte = jte , kts = kts , kte = kte   &
                         )
 
+       ! Friction velocity for TKE-EDMF based on resolved horizontal wind only.
+       ! GFS UST uses WSPD, which may include convective wind enhancement.
+       do j = jts, jte
+          do i = its, ite
+             ustm_p(i,j) = ust_p(i,j) * &
+                  max(sqrt(u_p(i,kts,j)**2 + v_p(i,kts,j)**2), 0.1_RKIND) / &
+                  max(wspd_p(i,j), 0.1_RKIND)
+          enddo
+       enddo
+
        if(config_frac_seaice) then
               call sf_gfs( &
                   u3d      = u_p    , v3d   = v_p       , t3d            = t_p      , &
@@ -1369,7 +1381,8 @@
                   rovcp    = rcp    , R     = R_d       , xlv            = xlv      , &
                   psfc     = psfc_p , chs   = chs_sea   , chs2           = chs2_sea , &
                   cqs2     = cqs2_sea, cpm   = cpm_sea  , znt            = znt_sea  , &
-                  ust      = ust_sea  , psim  = fm_sea  , psih           = fh_sea   , &
+                  ust      = ust_sea  , psim  = psim_sea, psih           = psih_sea , &
+                  fmout    = fm_sea , fhout = fh_sea     , &
                   xland    = xland_sea, hfx   = hfx_sea , qfx            = qfx_sea  , &
                   lh       = lh_sea   , tsk   = tsk_sea , flhc           = flhc_sea , &
                   flqc     = flqc_sea , qgh   = qgh_sea , qsfc           = qsfc_sea , &
@@ -1381,6 +1394,14 @@
                   ims = ims , ime = ime , jms = jms , jme = jme , kms = kms , kme = kme , &
                   its = its , ite = ite , jts = jts , jte = jte , kts = kts , kte = kte   &
                         )
+
+              do j = jts, jte
+                 do i = its, ite
+                    ustm_sea(i,j) = ust_sea(i,j) * &
+                         max(sqrt(u_p(i,kts,j)**2 + v_p(i,kts,j)**2), 0.1_RKIND) / &
+                         max(wspd_sea(i,j), 0.1_RKIND)
+                 enddo
+              enddo
        endif
        call mpas_timer_stop('sf_wrf_gfssfc')
 

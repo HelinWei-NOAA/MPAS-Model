@@ -622,11 +622,17 @@
  integer:: i,j,k
  integer:: icount,initflag,sub3d
  integer:: nbad_sas_after
+ integer, save :: nbad_sas_window = 0
+ integer, save :: nbad_sas_total  = 0
+ integer, save :: nbad_stage_window = 0
+ integer, save :: nbad_stage_total  = 0
  logical:: bad_sas_tend_col
 
  real(kind=RKIND):: dx
  real(kind=RKIND):: qv_after_sas
- real(kind=RKIND),parameter:: qv_floor_sas = 1.0e-12_RKIND
+ real(kind=RKIND),parameter:: qv_floor_sas = -1.0e-12_RKIND
+ real(kind=RKIND),parameter:: tstage_min_sas = 100._RKIND
+ real(kind=RKIND),parameter:: tstage_max_sas = 400._RKIND
  real(kind=RKIND),parameter:: max_rth_sas  = 5.0e-2_RKIND
  real(kind=RKIND),parameter:: max_rqv_sas  = 1.0e-4_RKIND
  real(kind=RKIND),parameter:: max_ru_sas   = 5.0_RKIND
@@ -984,15 +990,17 @@ real(kind=RKIND) :: p_sfc_safe, p_top_safe, frac_safe
 
             qv_gfs_sas(i,k) = max(1.0e-12_RKIND, qv_p(i,k,j) + dt_dyn * rqvften_p(i,k,j))
 
-            if (t_gfs_sas(i,k) /= t_gfs_sas(i,k) .or. &
-                t_gfs_sas(i,k) < 150._RKIND .or. t_gfs_sas(i,k) > 360._RKIND) then
-               write(0,*) 'BAD STAGED T BEFORE GFS SAS'
-               write(0,*) 'i,j,k=', i,j,k
-               write(0,*) 't_raw, t_stage=', t_p(i,k,j), t_gfs_sas(i,k)
-               write(0,*) 'rthften_p(temp tendency), rqvften_p=', &
-                    rthften_p(i,k,j), rqvften_p(i,k,j)
-               call flush(0)
-               t_gfs_sas(i,k) = min(360._RKIND, max(150._RKIND, t_gfs_sas(i,k)))
+            ! Very cold temperatures near the MPAS model top are valid.
+            ! Only nonfinite or truly extreme staged temperatures are guarded.
+            if (t_gfs_sas(i,k) /= t_gfs_sas(i,k)) then
+               nbad_stage_window = nbad_stage_window + 1
+               nbad_stage_total  = nbad_stage_total  + 1
+               t_gfs_sas(i,k) = min(tstage_max_sas, max(tstage_min_sas, t_p(i,k,j)))
+            else if (t_gfs_sas(i,k) < tstage_min_sas .or. &
+                     t_gfs_sas(i,k) > tstage_max_sas) then
+               nbad_stage_window = nbad_stage_window + 1
+               nbad_stage_total  = nbad_stage_total  + 1
+               t_gfs_sas(i,k) = min(tstage_max_sas, max(tstage_min_sas, t_gfs_sas(i,k)))
             endif
          enddo
          enddo
@@ -1116,23 +1124,9 @@ real(kind=RKIND) :: p_sfc_safe, p_top_safe, frac_safe
                     qv_after_sas < qv_floor_sas ) then
 
                   if (.not. bad_sas_tend_col) then
-                     nbad_sas_after = nbad_sas_after + 1
-                     write(0,*) 'BAD GFS SAS TENDENCY AFTER WRAPPER -- ZERO COLUMN ONLY'
-                     write(0,*) 'global i,j,k = ', i, j, k
-                     write(0,*) 'rthcuten_p   = ', rthcuten_p(i,k,j)
-                     write(0,*) 'rqvcuten_p   = ', rqvcuten_p(i,k,j)
-                     write(0,*) 'rucuten_p    = ', rucuten_p(i,k,j)
-                     write(0,*) 'rvcuten_p    = ', rvcuten_p(i,k,j)
-                     write(0,*) 'rqccuten_p   = ', rqccuten_p(i,k,j)
-                     write(0,*) 'rqicuten_p   = ', rqicuten_p(i,k,j)
-                     write(0,*) 'qv_before_after = ', qv_p(i,k,j), qv_after_sas
-                     write(0,*) 'state t,qv,u,v = ', &
-                                 t_p(i,k,j), qv_p(i,k,j), u_p(i,k,j), v_p(i,k,j)
-                     write(0,*) 'pressure mid,int(k),int(k+1) = ', &
-                                 pres_hyd_p(i,k,j), pres2_hyd_p(i,k,j), &
-                                 pres2_hyd_p(i,k+1,j)
-                     write(0,*) 'raincv,pratec before zero = ', raincv_p(i,j), pratec_p(i,j)
-                     call flush(0)
+                     nbad_sas_after  = nbad_sas_after + 1
+                     nbad_sas_window = nbad_sas_window + 1
+                     nbad_sas_total  = nbad_sas_total + 1
                   endif
 
                   bad_sas_tend_col = .true.
@@ -1163,6 +1157,21 @@ real(kind=RKIND) :: p_sfc_safe, p_top_safe, frac_safe
          ! cubot_p/cutop_p were set inside the wrapper from SAS kbot/ktop.
          cu_act_flag(its:ite,j) = raincv_p(its:ite,j) > 0._RKIND
       enddo
+
+      ! Local MPI-rank summary only. Zero water vapor is valid and is not
+      ! counted as a bad SAS update. Print infrequently to avoid log flooding.
+      if (mod(itimestep,1000) == 0) then
+         if (nbad_sas_window > 0 .or. nbad_stage_window > 0) then
+            write(0,'(A,I8,4(A,I12))') &
+               'GFS SAS GUARD SUMMARY: step=', itimestep, &
+               ' badcol_window=', nbad_sas_window, &
+               ' badcol_total=',  nbad_sas_total, &
+               ' stage_window=',  nbad_stage_window, &
+               ' stage_total=',   nbad_stage_total
+         endif
+         nbad_sas_window   = 0
+         nbad_stage_window = 0
+      endif
 
       if (allocated(z_int_sas)) deallocate(z_int_sas)
       call mpas_timer_stop('GFS scale-aware SAS')

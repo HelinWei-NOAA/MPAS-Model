@@ -1509,6 +1509,23 @@ endif
  real(kind=RKIND), allocatable :: stress_tkeedmf_p(:,:)
  real(kind=RKIND), allocatable :: zmid_tkeedmf_p(:,:,:)
  real(kind=RKIND), allocatable :: zint_tkeedmf_p(:,:,:)
+ real(kind=RKIND), allocatable :: tsk_tkeedmf_safe(:), hfx_tkeedmf_safe(:)
+ real(kind=RKIND), allocatable :: qfx_tkeedmf_safe(:), lh_tkeedmf_safe(:)
+ real(kind=RKIND), allocatable :: ust_tkeedmf_safe(:), stress_tkeedmf_safe(:)
+ real(kind=RKIND), allocatable :: znt_tkeedmf_safe(:), rb_tkeedmf_safe(:)
+ real(kind=RKIND), allocatable :: fm_tkeedmf_safe(:), fh_tkeedmf_safe(:)
+ integer, save :: sfcl_pbl_guard_window = 0
+ integer, save :: sfcl_pbl_guard_total  = 0
+ integer :: sfcl_pbl_guard_now
+ logical :: bad_sfcl_pbl
+
+ ! Diagnostic-only check of the surface-layer -> TKE-EDMF handoff.
+ ! fm_tkeedmf_safe/fh_tkeedmf_safe must contain the final positive
+ ! transfer denominators FM/FH, not the raw psi_m/psi_h corrections.
+ integer, save :: sfcl_link_bad_window = 0
+ integer, save :: sfcl_link_bad_total  = 0
+ integer :: sfcl_link_bad_now
+ real(kind=RKIND) :: rho_sfcl_check, heat_sfcl_check, evap_sfcl_check
 
 ! Rare-column TKE-EDMF safeguard. Use actual MPAS cell connectivity
 ! to replace only invalid PBL outputs with neighboring valid PBL outputs.
@@ -1643,11 +1660,121 @@ endif
           allocate(zint_tkeedmf_p(ims:ime,kms:kme+1,jms:jme))
        endif
 
+       allocate(tsk_tkeedmf_safe(its:ite), hfx_tkeedmf_safe(its:ite))
+       allocate(qfx_tkeedmf_safe(its:ite), lh_tkeedmf_safe(its:ite))
+       allocate(ust_tkeedmf_safe(its:ite), stress_tkeedmf_safe(its:ite))
+       allocate(znt_tkeedmf_safe(its:ite), rb_tkeedmf_safe(its:ite))
+       allocate(fm_tkeedmf_safe(its:ite), fh_tkeedmf_safe(its:ite))
+       sfcl_pbl_guard_now = 0
+       sfcl_link_bad_now = 0
+
        do j = jts,jte
        do i = its,ite
           coszen_tkeedmf_p(i,j) = 1.0_RKIND
-          lh_tkeedmf_p(i,j) = qfx_p(i,j) * xlv
-          stress_tkeedmf_p(i,j) = ust_p(i,j) * ust_p(i,j)
+
+          ! Use protected copies for the GFS surface-layer -> TKE-EDMF
+          ! interface.  Do not overwrite the MPAS/surface-layer fields.
+          tsk_tkeedmf_safe(i) = tsk_p(i,j)
+          hfx_tkeedmf_safe(i) = hfx_p(i,j)
+          qfx_tkeedmf_safe(i) = qfx_p(i,j)
+          ust_tkeedmf_safe(i) = ust_p(i,j)
+          znt_tkeedmf_safe(i) = znt_p(i,j)
+          rb_tkeedmf_safe(i)  = br_p(i,j)
+          ! In pbl_from_MPAS, psim_p is loaded from diag_physics%fm
+          ! and psih_p is loaded from diag_physics%fh.  Therefore these
+          ! are the final transfer denominators expected by TKE-EDMF.
+          fm_tkeedmf_safe(i)  = psim_p(i,j)
+          fh_tkeedmf_safe(i)  = psih_p(i,j)
+
+          ! Check the dimensional conversion that the wrapper will use:
+          !   heat = HFX/(rho*cp) [K m s-1]
+          !   evap = QFX/rho      [kg kg-1 m s-1]
+          rho_sfcl_check = pres_hyd_p(i,kts,j) /                         &
+               max(R_d * max(t_p(i,kts,j),100.0_RKIND) *                 &
+                   max(1.0_RKIND + 0.61_RKIND*qv_p(i,kts,j),0.5_RKIND), &
+                   1.0e-12_RKIND)
+          heat_sfcl_check = hfx_tkeedmf_safe(i) /                        &
+               max(rho_sfcl_check*cp,1.0e-12_RKIND)
+          evap_sfcl_check = qfx_tkeedmf_safe(i) /                        &
+               max(rho_sfcl_check,1.0e-12_RKIND)
+
+          ! Count only genuinely suspicious handoff values.  Do not alter
+          ! any field here; the existing emergency guard below remains
+          ! responsible for fallback behavior.
+          if (.not. ieee_is_finite(fm_tkeedmf_safe(i)) .or.              &
+              .not. ieee_is_finite(fh_tkeedmf_safe(i)) .or.              &
+              .not. ieee_is_finite(heat_sfcl_check) .or.                 &
+              .not. ieee_is_finite(evap_sfcl_check) .or.                 &
+              fm_tkeedmf_safe(i) <= 0.0_RKIND .or.                       &
+              fh_tkeedmf_safe(i) <= 0.0_RKIND .or.                       &
+              fm_tkeedmf_safe(i) > 100.0_RKIND .or.                      &
+              fh_tkeedmf_safe(i) > 100.0_RKIND .or.                      &
+              abs(heat_sfcl_check) > 5.0_RKIND .or.                      &
+              abs(evap_sfcl_check) > 2.0e-2_RKIND) then
+             sfcl_link_bad_now = sfcl_link_bad_now + 1
+          endif
+
+          bad_sfcl_pbl = .false.
+          if (.not. ieee_is_finite(tsk_tkeedmf_safe(i)) .or. &
+              .not. ieee_is_finite(hfx_tkeedmf_safe(i)) .or. &
+              .not. ieee_is_finite(qfx_tkeedmf_safe(i)) .or. &
+              .not. ieee_is_finite(ust_tkeedmf_safe(i)) .or. &
+              .not. ieee_is_finite(znt_tkeedmf_safe(i)) .or. &
+              .not. ieee_is_finite(rb_tkeedmf_safe(i))  .or. &
+              .not. ieee_is_finite(fm_tkeedmf_safe(i))  .or. &
+              .not. ieee_is_finite(fh_tkeedmf_safe(i))) then
+             bad_sfcl_pbl = .true.
+          endif
+
+          ! Deliberately broad emergency limits.  These identify a broken
+          ! coupling value, not ordinary strong surface forcing.
+          if (ieee_is_finite(tsk_tkeedmf_safe(i))) then
+             if (tsk_tkeedmf_safe(i) < 150.0_RKIND .or. &
+                 tsk_tkeedmf_safe(i) > 400.0_RKIND) bad_sfcl_pbl = .true.
+          endif
+          if (ieee_is_finite(hfx_tkeedmf_safe(i))) then
+             if (abs(hfx_tkeedmf_safe(i)) > 5000.0_RKIND) bad_sfcl_pbl = .true.
+          endif
+          if (ieee_is_finite(qfx_tkeedmf_safe(i))) then
+             if (abs(qfx_tkeedmf_safe(i)) > 2.0e-2_RKIND) bad_sfcl_pbl = .true.
+          endif
+          if (ieee_is_finite(ust_tkeedmf_safe(i))) then
+             if (ust_tkeedmf_safe(i) < 0.0_RKIND .or. &
+                 ust_tkeedmf_safe(i) > 20.0_RKIND) bad_sfcl_pbl = .true.
+          endif
+          if (ieee_is_finite(znt_tkeedmf_safe(i))) then
+             if (znt_tkeedmf_safe(i) <= 0.0_RKIND .or. &
+                 znt_tkeedmf_safe(i) > 10.0_RKIND) bad_sfcl_pbl = .true.
+          endif
+          if (ieee_is_finite(rb_tkeedmf_safe(i))) then
+             if (abs(rb_tkeedmf_safe(i)) > 100.0_RKIND) bad_sfcl_pbl = .true.
+          endif
+          if (ieee_is_finite(fm_tkeedmf_safe(i))) then
+             if (abs(fm_tkeedmf_safe(i)) > 100.0_RKIND) bad_sfcl_pbl = .true.
+          endif
+          if (ieee_is_finite(fh_tkeedmf_safe(i))) then
+             if (abs(fh_tkeedmf_safe(i)) > 100.0_RKIND) bad_sfcl_pbl = .true.
+          endif
+
+          if (bad_sfcl_pbl) then
+             sfcl_pbl_guard_now = sfcl_pbl_guard_now + 1
+             ! Neutral lower-boundary forcing for this PBL call only.
+             tsk_tkeedmf_safe(i) = t_p(i,kts,j)
+             hfx_tkeedmf_safe(i) = 0.0_RKIND
+             qfx_tkeedmf_safe(i) = 0.0_RKIND
+             ust_tkeedmf_safe(i) = 0.0_RKIND
+             znt_tkeedmf_safe(i) = max(1.0e-4_RKIND, &
+                                       min(1.0_RKIND,znt_p(i,j)))
+             rb_tkeedmf_safe(i)  = 0.0_RKIND
+             fm_tkeedmf_safe(i)  = 1.0_RKIND
+             fh_tkeedmf_safe(i)  = 1.0_RKIND
+          endif
+
+          lh_tkeedmf_safe(i) = qfx_tkeedmf_safe(i) * xlv
+          stress_tkeedmf_safe(i) = ust_tkeedmf_safe(i) * &
+                                   ust_tkeedmf_safe(i)
+          lh_tkeedmf_p(i,j) = lh_tkeedmf_safe(i)
+          stress_tkeedmf_p(i,j) = stress_tkeedmf_safe(i)
 
           ! Build geometric heights from MPAS layer thickness.
           ! zint is interface height and zmid is layer-center height.
@@ -1777,17 +1904,17 @@ endif
             rthraten_p(its:ite,kts:kte,jts),                          &
             exch_p(its:ite,kts:kte,jts),                              &
             coszen_tkeedmf_p(its:ite,jts),                            &
-            tsk_p(its:ite,jts),                                       &
-            hfx_p(its:ite,jts),                                       &
-            lh_tkeedmf_p(its:ite,jts),                                &
-            stress_tkeedmf_p(its:ite,jts),                            &
-            znt_p(its:ite,jts),                                       &
+            tsk_tkeedmf_safe(its:ite),                               &
+            hfx_tkeedmf_safe(its:ite),                               &
+            lh_tkeedmf_safe(its:ite),                                &
+            stress_tkeedmf_safe(its:ite),                            &
+            znt_tkeedmf_safe(its:ite),                               &
             u10_p(its:ite,jts),                                       &
             v10_p(its:ite,jts),                                       &
             vegfra_p(its:ite,jts),                                    &
-            br_p(its:ite,jts),                                        &
-            psim_p(its:ite,jts),                                      &
-            psih_p(its:ite,jts),                                      &
+            rb_tkeedmf_safe(its:ite),                                &
+            fm_tkeedmf_safe(its:ite),                                &
+            fh_tkeedmf_safe(its:ite),                                &
             hpbl_p(its:ite,jts),                                      &
             kpbl_p(its:ite,jts),                                      &
             rthblten_p(its:ite,kts:kte,jts),                          &
@@ -1797,6 +1924,36 @@ endif
             rqcblten_p(its:ite,kts:kte,jts),                          &
             rqiblten_p(its:ite,kts:kte,jts),                          &
             tke_edmf_cfg, tke_edmf_errmsg, tke_edmf_errflg)
+
+       sfcl_pbl_guard_window = sfcl_pbl_guard_window + sfcl_pbl_guard_now
+       sfcl_pbl_guard_total  = sfcl_pbl_guard_total  + sfcl_pbl_guard_now
+       sfcl_link_bad_window = sfcl_link_bad_window + sfcl_link_bad_now
+       sfcl_link_bad_total  = sfcl_link_bad_total  + sfcl_link_bad_now
+
+       ! Print only when an abnormal FM/FH or flux-unit handoff occurred.
+       ! This is local to each MPI task and appears at most every 1000 steps.
+       if (mod(itimestep,1000) == 0) then
+          if (sfcl_link_bad_window > 0) then
+             write(0,'(A,I8,A,I10,A,I12)')                              &
+                'TKE-EDMF SFCL LINK CHECK: step=',itimestep,             &
+                ' bad_window=',sfcl_link_bad_window,                     &
+                ' bad_total=',sfcl_link_bad_total
+          endif
+          sfcl_link_bad_window = 0
+       endif
+       if (mod(itimestep,1000) == 0 .and. sfcl_pbl_guard_window > 0) then
+          write(0,'(A,I8,A,I8,A,I12)') &
+             'GFS SFCL->TKE-EDMF GUARD step=', itimestep, &
+             ' window=', sfcl_pbl_guard_window, &
+             ' total=', sfcl_pbl_guard_total
+          sfcl_pbl_guard_window = 0
+       endif
+
+       deallocate(tsk_tkeedmf_safe, hfx_tkeedmf_safe)
+       deallocate(qfx_tkeedmf_safe, lh_tkeedmf_safe)
+       deallocate(ust_tkeedmf_safe, stress_tkeedmf_safe)
+       deallocate(znt_tkeedmf_safe, rb_tkeedmf_safe)
+       deallocate(fm_tkeedmf_safe, fh_tkeedmf_safe)
 
        !-----------------------------------------------------------------
        ! TEST: identify columns for which the returned TKE-EDMF tendency

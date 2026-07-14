@@ -8,7 +8,7 @@ CONTAINS
 !-------------------------------------------------------------------
    SUBROUTINE SF_GFS(U3D,V3D,T3D,QV3D,P3D,                              &
 		 CP,dz8w,ROVCP,R,XLV,PSFC,CHS,CHS2,CQS2,CPM,             &
-                     ZNT,UST,PSIM,PSIH,                                 &
+                     ZNT,UST,PSIM,PSIH,FMOUT,FHOUT,                     &
 		 XLAND,HFX,QFX,LH,TSK,FLHC,FLQC,                    &
                      QGH,QSFC,U10,V10,                                  &
                      GZ1OZ0,WSPD,BR,ISFFLX,                             &
@@ -35,7 +35,9 @@ CONTAINS
 !-- ZNT		roughness length (m)
 !-- UST		u* in similarity theory (m/s)
 !-- PSIM        similarity stability function for momentum
-!-- PSIH        similarity stability function for heat
+!-- PSIH        similarity stability correction for heat
+!-- FMOUT       final momentum transfer denominator log(z/z0)-psi_m
+!-- FHOUT       final heat/moisture transfer denominator log(z/z0t)-psi_h
 !-- XLAND	land mask (1 for land, 2 for water)
 !-- HFX		upward heat flux at the surface (W/m^2)
 !-- QFX   	upward moisture flux at the surface (kg/m^2/s)
@@ -116,6 +118,8 @@ CONTAINS
                                         LH,                             &
                                         PSIM,                           &
                                         PSIH,                           &
+                                        FMOUT,                          &
+                                        FHOUT,                          &
                                         QFX,                            &
                                         QGH,                            &
                                         QSFC,                           &
@@ -246,6 +250,8 @@ CONTAINS
         QSFC(I,J)=qss(i)
         PSIH(i,j)=PH(i)
         PSIM(i,j)=PM(i)
+        FMOUT(i,j)=FM(i)
+        FHOUT(i,j)=FH(i)
         UST(i,j)=ustar(i)
         WSPD(i,j)=WIND(i)
         ZNT(i,j)=Z0RL(i)*.01
@@ -270,10 +276,10 @@ CONTAINS
             HFX(I,J)=FLHC(I,J)*(THGB(I)-THX(I))
           ELSEIF(XLAND(I,J)-1.5.LT.0.)THEN
             HFX(I,J)=FLHC(I,J)*(THGB(I)-THX(I))
-            HFX(I,J)=AMAX1(HFX(I,J),-250.)
+!           HFX(I,J)=AMAX1(HFX(I,J),-250.)
           ENDIF
           QFX(I,J)=FLQC(I,J)*(QSFC(I,J)-Q1(I))
-          QFX(I,J)=AMAX1(QFX(I,J),0.)
+!         QFX(I,J)=AMAX1(QFX(I,J),0.)
           LH(I,J)=XLV*QFX(I,J)
         ENDDO
       ENDIF
