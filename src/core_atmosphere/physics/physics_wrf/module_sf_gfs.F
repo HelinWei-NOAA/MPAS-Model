@@ -7,7 +7,7 @@ CONTAINS
 
 !-------------------------------------------------------------------
    SUBROUTINE SF_GFS(U3D,V3D,T3D,QV3D,P3D,                              &
-		 CP,dz8w,ROVCP,R,XLV,PSFC,CHS,CHS2,CQS2,CPM,             &
+		 CP,dz8w,mavail,ROVCP,R,XLV,PSFC,CHS,CHS2,CQS2,CPM,     &
                      ZNT,UST,PSIM,PSIH,                                 &
 		 XLAND,HFX,QFX,LH,TSK,FLHC,FLQC,                    &
                      QGH,QSFC,U10,V10,                                  &
@@ -96,6 +96,7 @@ CONTAINS
 
       REAL,    DIMENSION(ims:ime, jms:jme), INTENT(IN) ::               &
                                         TSK,                            &
+                                        mavail,                         &
                                         PSFC,                           &
                                         XLAND
 
@@ -180,7 +181,7 @@ CONTAINS
                                         KM
 
 
-   if(itimestep.eq.0) then
+   if(itimestep.eq.1) then
      CALL GFUNCPHYS
    endif
 
@@ -238,22 +239,29 @@ CONTAINS
         U10(i,j)=U10M(i)
         V10(i,j)=V10M(i)
         BR(i,j)=RB(i)
-        CHS(I,J)=CH(I)*WIND(I)
-        CHS2(I,J)=USTAR(I)*KARMAN/FH2(I)
+        ! jdong recalculate chs/chs2 with ustar
+        !CHS(I,J)=CH(I)*WIND(I)
+        !CHS2(I,J)=USTAR(I)*KARMAN/FH2(I)
         CPM(I,J)=CP*(1.+0.8*QV3D(i,kts,j))
         esat = fpvs(t1(i))
         QGH(I,J)=ep2*esat/(1000.*ps(i)-esat)
         QSFC(I,J)=qss(i)
-        PSIH(i,j)=PH(i)
-        PSIM(i,j)=PM(i)
-        UST(i,j)=ustar(i)
+        ! jdong pass out FH/FM
+        PSIH(i,j)=FH(i)
+        PSIM(i,j)=FM(i)
+        ! jdong ustar average
+        ! TO PREVENT OSCILLATIONS AVERAGE WITH OLD VALUE 
+        !UST(i,j)=ustar(i)
+        UST(i,j)=0.5*ust(i,j)+0.5*ustar(i)
+        CHS(I,J)=UST(I,j)*KARMAN/FH(I)
+        CHS2(I,J)=UST(I,j)*KARMAN/FH2(I)
         WSPD(i,j)=WIND(i)
         ZNT(i,j)=Z0RL(i)*.01
       ENDDO
 
       DO i=its,ite
         FLHC(i,j)=CPM(I,J)*RHO1(I)*CHS(I,J)
-        FLQC(i,j)=RHO1(I)*CHS(I,J)
+        FLQC(i,j)=RHO1(I)*CHS(I,J)*mavail(i,j)
         GZ1OZ0(i,j)=LOG(Z1(I)/(Z0RL(I)*.01))
         CQS2(i,j)=CHS2(I,J)
       ENDDO
