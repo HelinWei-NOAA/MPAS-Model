@@ -99,6 +99,8 @@ contains
     real(kind=RKIND), parameter :: epsm1 = eps - 1.0_RKIND
     real(kind=RKIND), parameter :: z0lo = 0.1_RKIND
     real(kind=RKIND), parameter :: z0up = 1.0_RKIND
+    real(kind=RKIND), parameter :: p0ref = 100000.0_RKIND
+    real(kind=RKIND), parameter :: kappa = rd/cp
 
     real(kind=RKIND), allocatable :: rtg(:,:,:), q1(:,:,:)
     real(kind=RKIND), allocatable :: u1(:,:), v1(:,:), t1(:,:)
@@ -222,7 +224,11 @@ contains
         q1(i,k,ntke) = max(tke_mpas(i,kk), 1.0e-9_RKIND)
 
         prsl(i,k)  = p_mid(i,kk)
-        prslk(i,k) = exner_mid(i,kk)
+!       prslk(i,k) = exner_mid(i,kk)
+        ! Use a GFS-consistent Exner ratio inside satmedmfvdifq:
+        ! pix = psk/prslk = (ps/prsl)**kappa.
+        ! satmedmfvdifq only uses prslk through this ratio.
+        prslk(i,k) = (max(prsl(i,kk),1.0_RKIND)/p0ref)**kappa
 
         ! UFS routine expects geopotential, not geometric height.
         phil(i,k) = grav * z_mid(i,kk)
