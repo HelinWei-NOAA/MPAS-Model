@@ -1516,6 +1516,7 @@ endif
                    spp_pbl
 
  real(kind=RKIND),pointer:: bl_mynn_closure
+ real(kind=RKIND), dimension(:), pointer :: coszr
 
 !local variables:
  integer:: initflag
@@ -1542,7 +1543,7 @@ endif
  integer, dimension(:,:), pointer :: cellsOnCell
  logical, allocatable :: pbl_col_valid(:), pbl_col_bad(:)
  logical, allocatable :: pbl_press_valid(:), pbl_press_bad(:)
- real(kind=RKIND), allocatable :: p_mid_tkeedmf(:,:), p_int_tkeedmf(:,:)
+ real(kind=RKIND), allocatable :: p_mid_tkeedmf(:,:), p_int_tkeedmf(:,:), pi_tkeedmf(:,:)
  integer :: n, nbr, ngood, nbad_pbl, nbad_press, bad_reason
  integer, save :: pbl_repair_total_local = 0
  integer, save :: pbl_repair_window_local = 0
@@ -1625,11 +1626,13 @@ endif
 
        call mpas_pool_get_array(mesh,'nEdgesOnCell',nEdgesOnCell)
        call mpas_pool_get_array(mesh,'cellsOnCell' ,cellsOnCell )
+       call mpas_pool_get_array(diag_physics,'coszr',coszr)
 
        allocate(pbl_col_valid(ims:ime), pbl_col_bad(ims:ime))
        allocate(pbl_press_valid(ims:ime), pbl_press_bad(ims:ime))
        allocate(p_mid_tkeedmf(its:ite,kts:kte))
        allocate(p_int_tkeedmf(its:ite,kts:kte+1))
+       allocate(pi_tkeedmf(its:ite,kts:kte))
        pbl_col_valid   = .false.
        pbl_col_bad     = .false.
        pbl_press_valid = .false.
@@ -1671,7 +1674,12 @@ endif
 
        do j = jts,jte
        do i = its,ite
-          coszen_tkeedmf_p(i,j) = 1.0_RKIND
+          ! MPAS shortwave radiation stores coszr as the cosine of the
+          ! solar zenith angle evaluated at the radiation-call midpoint.
+          ! Pass it to the TKE-EDMF adapter as the radiation reference
+          ! solar-zenith quantity; the wrapper uses it for day/night and
+          ! a neutral temporal-adjustment approximation (xmu=1 by day).
+          coszen_tkeedmf_p(i,j) = max(coszr(i), 0.0_RKIND)
           lh_tkeedmf_p(i,j) = qfx_p(i,j) * xlv
           stress_tkeedmf_p(i,j) = ust_p(i,j) * ust_p(i,j)
 
@@ -1781,6 +1789,15 @@ endif
           enddo
        enddo
 
+       ! Build Exner from the SAME (possibly repaired) pressure column
+       ! passed to TKE-EDMF.  This avoids mixing repaired p_mid/p_int with
+       ! the original MPAS pi_p in the PBL tendency conversion/checks.
+       do k = kts, kte
+       do i = its, ite
+          pi_tkeedmf(i,k) = (max(p_mid_tkeedmf(i,k),1.0_RKIND)/P0)**rcp
+       enddo
+       enddo
+
        ! Quiet test: pressure repair remains active, but its routine
        ! per-step diagnostic is suppressed.  Only the post-PBL neighbor
        ! repair count is printed below.
@@ -1799,7 +1816,7 @@ endif
             tkepbl_p(its:ite,kts:kte,jts),                            &
             p_mid_tkeedmf(its:ite,kts:kte),                            &
             p_int_tkeedmf(its:ite,kts:kte+1),                         &
-            pi_p(its:ite,kts:kte,jts),                                &
+            pi_tkeedmf(its:ite,kts:kte),                              &
             rthraten_p(its:ite,kts:kte,jts),                          &
             exch_p(its:ite,kts:kte,jts),                              &
             coszen_tkeedmf_p(its:ite,jts),                            &
@@ -1859,7 +1876,7 @@ endif
 
                    ! rthblten is potential-temperature tendency. Convert the
                    ! one-step impact to physical temperature with Exner pi_p.
-                   t_after  = t_p(i,k,jts)  + dt_pbl*pi_p(i,k,jts)*rthblten_p(i,k,jts)
+                   t_after  = t_p(i,k,jts)  + dt_pbl*pi_tkeedmf(i,k)*rthblten_p(i,k,jts)
                    qv_after = qv_p(i,k,jts) + dt_pbl*rqvblten_p(i,k,jts)
                    qc_after = qc_p(i,k,jts) + dt_pbl*rqcblten_p(i,k,jts)
                    qi_after = qi_p(i,k,jts) + dt_pbl*rqiblten_p(i,k,jts)
@@ -2078,6 +2095,7 @@ endif
        if (allocated(pbl_press_bad))   deallocate(pbl_press_bad)
        if (allocated(p_mid_tkeedmf))   deallocate(p_mid_tkeedmf)
        if (allocated(p_int_tkeedmf))   deallocate(p_int_tkeedmf)
+       if (allocated(pi_tkeedmf))      deallocate(pi_tkeedmf)
 
        if (tke_edmf_errflg /= 0) then
           write(*,*) 'FATAL in bl_tke_edmf: ', trim(tke_edmf_errmsg)

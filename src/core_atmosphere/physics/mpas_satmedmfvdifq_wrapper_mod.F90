@@ -2,6 +2,7 @@ module mpas_satmedmfvdifq_wrapper_mod
 
   use mpas_kind_types, only: RKIND
   use satmedmfvdifq, only: satmedmfvdifq_run
+  use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
   implicit none
 
   type mpas_satmedmfvdifq_config_type
@@ -228,7 +229,7 @@ contains
         ! Use a GFS-consistent Exner ratio inside satmedmfvdifq:
         ! pix = psk/prslk = (ps/prsl)**kappa.
         ! satmedmfvdifq only uses prslk through this ratio.
-        prslk(i,k) = (max(prsl(i,kk),1.0_RKIND)/p0ref)**kappa
+        prslk(i,k) = (max(prsl(i,k),1.0_RKIND)/p0ref)**kappa
 
         ! UFS routine expects geopotential, not geometric height.
         phil(i,k) = grav * z_mid(i,kk)
@@ -249,14 +250,30 @@ contains
 
     do k = 1, km
       do i = 1, im
-        del(i,k) = abs(prsi(i,k) - prsi(i,k+1))
+        del(i,k) = prsi(i,k) - prsi(i,k+1)
+        if (.not. ieee_is_finite(del(i,k)) .or. del(i,k) <= 0.0_RKIND) then
+          errflg = 1
+          write(errmsg,'(A,I0,A,I0,A,ES14.6)') &
+               'mpas_call_satmedmfvdifq: non-positive del at i=', i, &
+               ', k=', k, ', del=', del(i,k)
+          return
+        endif
       enddo
     enddo
 
     do i = 1, im
       garea(i) = areaCell(i)
 
-      xmu(i) = max(coszen(i), 0.0_RKIND)
+      ! GFS defines xmu as xcosz/coszen, not coszen itself.  MPAS
+      ! currently provides the radiation-time coszr but not a separate
+      ! current-time xcosz to this PBL driver.  Until both are carried
+      ! through the interface, use the consistent approximation
+      ! xcosz=coszen: xmu=1 in daylight and 0 at night.
+      if (coszen(i) > 1.0e-4_RKIND) then
+        xmu(i) = 1.0_RKIND
+      else
+        xmu(i) = 0.0_RKIND
+      endif
 
       ! UFS code uses z0 = 0.01*zorl, so zorl is in cm.
       zorl(i) = max(z0_mpas(i), 1.0e-6_RKIND) * 100.0_RKIND
@@ -281,8 +298,9 @@ contains
       ! If MPAS does not have rbsoil, start neutral.
 !     rbsoil(i) = 0.0_RKIND
 
-      ! psk is surface Exner. Use lowest layer as fallback.
-      psk(i) = prslk(i,kk)
+      ! psk is the dimensionless Exner function at the surface interface.
+      ! Use the same repaired interface-pressure column passed to TKE-EDMF.
+      psk(i) = (max(prsi(i,1),1.0_RKIND)/p0ref)**kappa
 
 ! MPAS vegfra_in is percent (0-100).
 ! GFS TKE-EDMF expects sigmaf as fraction (0-1).
@@ -339,7 +357,10 @@ contains
       do i = 1, im
         kk = kmap(i,k)
 
-        ten_t_out(i,kk) = tdt(i,k)/exner_mid(i,kk)
+        ! Convert physical-temperature tendency to MPAS potential-temperature
+        ! tendency using the Exner function from the SAME pressure column
+        ! that was supplied to TKE-EDMF.
+        ten_t_out(i,kk) = tdt(i,k)/prslk(i,k)
         ten_u_out(i,kk) = du(i,k)
         ten_v_out(i,kk) = dv(i,k)
 
