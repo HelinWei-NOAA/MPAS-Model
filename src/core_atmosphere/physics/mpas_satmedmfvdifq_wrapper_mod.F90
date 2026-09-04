@@ -23,8 +23,8 @@ module mpas_satmedmfvdifq_wrapper_mod
     real(kind=RKIND) :: xkzm_h = 1.0_RKIND
     real(kind=RKIND) :: xkzm_s = 1.0_RKIND
     real(kind=RKIND) :: dspfac = 1.0_RKIND
-    real(kind=RKIND) :: bl_upfr = 0.07_RKIND
-    real(kind=RKIND) :: bl_dnfr = 0.05_RKIND
+    real(kind=RKIND) :: bl_upfr = 0.13_RKIND
+    real(kind=RKIND) :: bl_dnfr = 0.10_RKIND
     real(kind=RKIND) :: rlmx = 300.0_RKIND
     real(kind=RKIND) :: elmx = 300.0_RKIND
   end type mpas_satmedmfvdifq_config_type
@@ -98,10 +98,10 @@ contains
     real(kind=RKIND), parameter :: fv    = rv/rd - 1.0_RKIND
     real(kind=RKIND), parameter :: eps   = rd/rv
     real(kind=RKIND), parameter :: epsm1 = eps - 1.0_RKIND
-    real(kind=RKIND), parameter :: z0lo = 0.1_RKIND
-    real(kind=RKIND), parameter :: z0up = 1.0_RKIND
     real(kind=RKIND), parameter :: p0ref = 100000.0_RKIND
     real(kind=RKIND), parameter :: kappa = rd/cp
+    real(kind=RKIND), parameter :: z0lo = 0.1_RKIND
+    real(kind=RKIND), parameter :: z0up = 1.0_RKIND
 
     real(kind=RKIND), allocatable :: rtg(:,:,:), q1(:,:,:)
     real(kind=RKIND), allocatable :: u1(:,:), v1(:,:), t1(:,:)
@@ -225,11 +225,13 @@ contains
         q1(i,k,ntke) = max(tke_mpas(i,kk), 1.0e-9_RKIND)
 
         prsl(i,k)  = p_mid(i,kk)
-!       prslk(i,k) = exner_mid(i,kk)
-        ! Use a GFS-consistent Exner ratio inside satmedmfvdifq:
-        ! pix = psk/prslk = (ps/prsl)**kappa.
-        ! satmedmfvdifq only uses prslk through this ratio.
-        prslk(i,k) = (max(prsl(i,k),1.0_RKIND)/p0ref)**kappa
+
+        ! Use native MPAS Exner directly, matching the YSU input path.
+        ! GFS satmedmfvdifq forms pix = psk/prslk internally, so psk
+        ! below is computed independently from the surface-interface
+        ! pressure using the same p0=100000 Pa and kappa=Rd/Cp.
+        prslk(i,k) = exner_mid(i,kk)
+
 
         ! UFS routine expects geopotential, not geometric height.
         phil(i,k) = grav * z_mid(i,kk)
@@ -298,8 +300,9 @@ contains
       ! If MPAS does not have rbsoil, start neutral.
 !     rbsoil(i) = 0.0_RKIND
 
-      ! psk is the dimensionless Exner function at the surface interface.
-      ! Use the same repaired interface-pressure column passed to TKE-EDMF.
+      ! GFS psk is surface-interface Exner referenced to p0=100000 Pa.
+      ! It is NOT the lowest-model-layer Exner.  satmedmfvdifq uses
+      ! pix = psk/prslk = (ps/pk)**kappa.
       psk(i) = (max(prsi(i,1),1.0_RKIND)/p0ref)**kappa
 
 ! MPAS vegfra_in is percent (0-100).
@@ -368,7 +371,23 @@ contains
         ten_qc_out(i,kk) = rtg(i,k,ntcw)
         ten_qi_out(i,kk) = rtg(i,k,ntiw)
 
-        tke_mpas(i,kk) = max(q1(i,k,ntke), 0.0_RKIND)
+        ! satmedmfvdifq treats q1(:,:,ntke) as the INPUT prognostic TKE.
+        ! The updated TKE is returned as a tendency in rtg(:,:,ntke):
+        !   rtg(ntke) = (TKE_new - TKE_old) / dt
+        ! because rtg is initialized to zero in this wrapper.  Therefore
+        ! copy the advanced TKE state back to MPAS, not the unchanged q1.
+        if (ieee_is_finite(q1(i,k,ntke)) .and. &
+            ieee_is_finite(rtg(i,k,ntke))) then
+          ! Prognostic TKE coupling:
+          ! satmedmfvdifq returns d(TKE)/dt in rtg(:,:,ntke).
+          ! Do not copy q1 back unchanged.
+          tke_mpas(i,kk) = max(1.0e-9_RKIND, &
+                               q1(i,k,ntke) + dt*rtg(i,k,ntke))
+        else
+          errflg = 1
+          errmsg = 'Non-finite GFS TKE-EDMF prognostic TKE update'
+          return
+        endif
       enddo
     enddo
 

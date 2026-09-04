@@ -553,10 +553,13 @@
  real(kind=RKIND),dimension(:,:),pointer:: sub_thl,sub_qv,det_thl,det_qv
 
 !local pointers for tke_edmf
-! tke is stored as scalars(5,k,i) for bl_tke_edmf_in.
+! Prognostic TKE index is obtained from the Registry-generated state dimension
+! index_tke.  Never hard-code a scalar slot here: scalar ordering changes when
+! hydrometeors/packages are added or reordered.
 
 !local pointers for chemistry
  integer,pointer                           :: chemistry_start,chemistry_end
+ integer,pointer                           :: index_tke
  real(kind=RKIND),dimension(:,:,:),pointer :: scalars
  real(kind=RKIND),dimension(:,:,:),pointer :: tend_chem_settle
  real(kind=RKIND),dimension(:,:  ),pointer :: ddvel
@@ -749,6 +752,7 @@
 ! Get the parent state scalar array and use scalar index 5 for tke.
 ! ------------------------------------------------------------------
        call mpas_pool_get_array(state,'scalars',scalars,1)
+       call mpas_pool_get_dimension(state,'index_tke',index_tke)
 
        do j = jts,jte
        do i = its,ite
@@ -768,9 +772,10 @@
 ! Do not read tke_pbl from MPAS here.  In some MPAS builds this
 ! diagnostic is not allocated before the TKE-EDMF call, and reading
 ! tke_pbl(k,i) causes the SIGSEGV seen near this block.  The wrapper
-! will update tkepbl_p and pbl_to_MPAS will write it back afterward.
+! advances TKE using rtg(:,:,ntke), updates tkepbl_p, and pbl_to_MPAS
+! writes that advanced prognostic state back to scalars(index_tke).
 !         tkepbl_p(i,k,j)   = 0.0_RKIND
-          tkepbl_p(i,k,j)   = max(1.0e-9_RKIND, scalars(5,k,i))
+          tkepbl_p(i,k,j)   = max(1.0e-9_RKIND, scalars(index_tke,k,i))
        enddo
        enddo
        enddo
@@ -1069,7 +1074,8 @@
  real(kind=RKIND),dimension(:,:),pointer:: sub_thl,sub_qv,det_thl,det_qv
 
 !local pointers for tke_edmf
-! tke is stored as scalars(5,k,i) for bl_tke_edmf_in.
+! Prognostic TKE index is obtained from the Registry-generated state dimension
+! index_tke.  Never hard-code a scalar slot here.
 
 !local pointers for chemistry
  real(kind=RKIND),dimension(:,:,:),pointer:: scalars
@@ -1077,6 +1083,7 @@
  real(kind=RKIND),dimension(:,:,:),pointer:: tend_chem_settle
  real(kind=RKIND),dimension(:,:),pointer  :: ddvel
  integer,pointer :: chemistry_start,chemistry_end
+ integer,pointer :: index_tke
 
 !local pointers for MYJ scheme:
  real(kind=RKIND),dimension(:),pointer   :: thz0,qz0,uz0,vz0,akhs,akms,ct,mixht,qsfc,ust,znt
@@ -1152,18 +1159,18 @@ endif
 
     case("bl_tke_edmf")
 ! ------------------------------------------------------------------
-! Copy updated prognostic TKE back to MPAS state scalars.
-!
-! Registry order in var_array scalars for this configuration is:
-!   1=qv, 2=qc, 3=qr, 4=qi, 5=tke
-! This path is only active for bl_tke_edmf, so other PBL schemes are unchanged.
+! Copy updated prognostic TKE back to the Registry-defined TKE scalar.
+! Do not hard-code the scalar slot: in the current configuration index_tke
+! is outside moist_start:moist_end, while scalar slot 5 is a moist species.
+! This path is only active for bl_tke_edmf; other PBL schemes are unchanged.
 ! ------------------------------------------------------------------
        call mpas_pool_get_array(state,'scalars',scalars,1)
+       call mpas_pool_get_dimension(state,'index_tke',index_tke)
 
        do j = jts,jte
        do k = kts,kte
        do i = its,ite
-          scalars(5,k,i) = max(1.0e-9_RKIND, tkepbl_p(i,k,j))
+          scalars(index_tke,k,i) = max(1.0e-9_RKIND, tkepbl_p(i,k,j))
        enddo
        enddo
        enddo
@@ -1544,34 +1551,15 @@ endif
  logical, allocatable :: pbl_col_valid(:), pbl_col_bad(:)
  logical, allocatable :: pbl_press_valid(:), pbl_press_bad(:)
  real(kind=RKIND), allocatable :: p_mid_tkeedmf(:,:), p_int_tkeedmf(:,:), pi_tkeedmf(:,:)
- integer :: n, nbr, ngood, nbad_pbl, nbad_press, bad_reason
- integer, save :: pbl_repair_total_local = 0
- integer, save :: pbl_repair_window_local = 0
- integer, save :: pbl_pressure_total_local = 0
- integer, save :: pbl_pressure_window_local = 0
- integer, save :: nbad_nan_window  = 0
- integer, save :: nbad_hpbl_window = 0
- integer, save :: nbad_t_window    = 0
- integer, save :: nbad_qv_window   = 0
- integer, save :: nqv_limited_window = 0
- integer, save :: nqv_limited_total  = 0
- integer, save :: nqc_limited_window = 0
- integer, save :: nqc_limited_total  = 0
- integer, save :: nqi_limited_window = 0
- integer, save :: nqi_limited_total  = 0
- integer, save :: nbad_qc_window   = 0
- integer, save :: nbad_qi_window   = 0
- integer, save :: nbad_uv_window   = 0
- integer, save :: nbad_tke_window  = 0
+ integer :: n, nbr, ngood, bad_reason
  real(kind=RKIND) :: t_after, qv_after, qc_after, qi_after
  real(kind=RKIND) :: min_dp_press, p_lower, p_upper
  real(kind=RKIND) :: u_after, v_after
  real(kind=RKIND) :: sum_hpbl
  integer :: sum_kpbl
 
+
 !-----------------------------------------------------------------------------------------------------------------
-!call mpas_log_write('')
-!call mpas_log_write('--- enter subroutine driver_pbl:')
 
 !initialization of CCPP-compliant flags:
  errmsg = ' '
@@ -1697,14 +1685,17 @@ endif
        enddo
        enddo
        !---------------------------------------------------------------
-       ! TEST: repair a pressure column before TKE-EDMF only when the
-       ! interface pressure is non-finite, non-positive, or fails to
-       ! decrease upward.  The repair uses actual MPAS cellsOnCell
-       ! neighbors.  The MPAS pressure state itself is not overwritten;
-       ! only these temporary arrays are passed to the PBL wrapper.
+       ! Restore the previously working 60-km pressure-column repair
+       ! before the GFS TKE-EDMF call.
+       !
+       ! Repair only temporary PBL pressure arrays when the native MPAS
+       ! pressure column is non-finite, non-positive, non-monotonic, or
+       ! has a layer midpoint outside its bounding interfaces.  The MPAS
+       ! model state itself is NOT modified.
        !---------------------------------------------------------------
        p_mid_tkeedmf(:,:) = pres_hyd_p(its:ite,kts:kte,jts)
        p_int_tkeedmf(:,:) = pres2_hyd_p(its:ite,kts:kte+1,jts)
+       pi_tkeedmf(:,:)     = pi_p(its:ite,kts:kte,jts)
 
        ! Determine valid pressure profiles for owned and halo cells so
        ! that a bad owned cell can use valid physical neighbors.
@@ -1717,6 +1708,7 @@ endif
                 pbl_press_valid(i) = .false.
                 exit
              endif
+
              if (pres2_hyd_p(i,k,jts) <= 0.0_RKIND .or. &
                  pres2_hyd_p(i,k+1,jts) <= 0.0_RKIND .or. &
                  pres2_hyd_p(i,k+1,jts) >= pres2_hyd_p(i,k,jts) .or. &
@@ -1731,9 +1723,7 @@ endif
        do i = its, ite
           pbl_press_bad(i) = .not. pbl_press_valid(i)
        enddo
-       nbad_press = count(pbl_press_bad(its:ite))
-       pbl_pressure_total_local  = pbl_pressure_total_local  + nbad_press
-       pbl_pressure_window_local = pbl_pressure_window_local + nbad_press
+
 
        do i = its, ite
           if (.not. pbl_press_bad(i)) cycle
@@ -1761,7 +1751,7 @@ endif
                   real(ngood,RKIND)
           else
              ! Emergency fallback when no valid neighbor is locally
-             ! available.  Preserve the original surface interface and
+             ! available. Preserve the original surface interface and
              ! force a minimally monotonic profile only for this PBL call.
              p_int_tkeedmf(i,kts) = max(100.0_RKIND, &
                   pres2_hyd_p(i,kts,jts))
@@ -1777,10 +1767,12 @@ endif
           do k = kts, kte
              p_lower = p_int_tkeedmf(i,k)
              p_upper = p_int_tkeedmf(i,k+1)
+
              if (p_upper >= p_lower-min_dp_press) then
                 p_upper = max(1.0_RKIND,p_lower-min_dp_press)
                 p_int_tkeedmf(i,k+1) = p_upper
              endif
+
              if (p_mid_tkeedmf(i,k) >= p_lower .or. &
                  p_mid_tkeedmf(i,k) <= p_upper .or. &
                  .not. ieee_is_finite(p_mid_tkeedmf(i,k))) then
@@ -1788,19 +1780,6 @@ endif
              endif
           enddo
        enddo
-
-       ! Build Exner from the SAME (possibly repaired) pressure column
-       ! passed to TKE-EDMF.  This avoids mixing repaired p_mid/p_int with
-       ! the original MPAS pi_p in the PBL tendency conversion/checks.
-       do k = kts, kte
-       do i = its, ite
-          pi_tkeedmf(i,k) = (max(p_mid_tkeedmf(i,k),1.0_RKIND)/P0)**rcp
-       enddo
-       enddo
-
-       ! Quiet test: pressure repair remains active, but its routine
-       ! per-step diagnostic is suppressed.  Only the post-PBL neighbor
-       ! repair count is printed below.
 
        call mpas_call_satmedmfvdifq(                                  &
             (ite-its+1), (kte-kts+1), 4, dt_pbl,                      &
@@ -1842,7 +1821,7 @@ endif
             tke_edmf_cfg, tke_edmf_errmsg, tke_edmf_errflg)
 
        !-----------------------------------------------------------------
-       ! TEST: identify columns for which the returned TKE-EDMF tendency
+       ! Safeguard: identify columns for which the returned TKE-EDMF tendency
        ! would produce a non-finite or clearly unphysical one-step state.
        ! Do not modify valid columns.  For a bad column, replace the full
        ! PBL tendency profile with the mean from valid cellsOnCell neighbors.
@@ -1910,8 +1889,6 @@ endif
                       rqvblten_p(i,k,jts) = -qv_p(i,k,jts) / &
                            max(dt_pbl, tiny(1.0_RKIND))
                       qv_after = qv_p(i,k,jts) + dt_pbl*rqvblten_p(i,k,jts)
-                      nqv_limited_window = nqv_limited_window + 1
-                      nqv_limited_total  = nqv_limited_total  + 1
 
                       ! Only a nonfinite or materially positive-overflow state
                       ! remains a reason for whole-column neighbor repair.
@@ -1928,8 +1905,6 @@ endif
                       rqcblten_p(i,k,jts) = -qc_p(i,k,jts) / &
                            max(dt_pbl, tiny(1.0_RKIND))
                       qc_after = qc_p(i,k,jts) + dt_pbl*rqcblten_p(i,k,jts)
-                      nqc_limited_window = nqc_limited_window + 1
-                      nqc_limited_total  = nqc_limited_total  + 1
                       if (.not. ieee_is_finite(qc_after)) then
                          bad_reason = 1
                          exit
@@ -1940,8 +1915,6 @@ endif
                       rqiblten_p(i,k,jts) = -qi_p(i,k,jts) / &
                            max(dt_pbl, tiny(1.0_RKIND))
                       qi_after = qi_p(i,k,jts) + dt_pbl*rqiblten_p(i,k,jts)
-                      nqi_limited_window = nqi_limited_window + 1
-                      nqi_limited_total  = nqi_limited_total  + 1
                       if (.not. ieee_is_finite(qi_after)) then
                          bad_reason = 1
                          exit
@@ -1960,31 +1933,7 @@ endif
 
              pbl_col_valid(i) = (bad_reason == 0)
              pbl_col_bad(i)   = .not. pbl_col_valid(i)
-
-             ! Count only the first failure reason for each repaired column.
-             select case (bad_reason)
-             case (1)
-                nbad_nan_window = nbad_nan_window + 1
-             case (2)
-                nbad_hpbl_window = nbad_hpbl_window + 1
-             case (3)
-                nbad_t_window = nbad_t_window + 1
-             case (4)
-                nbad_qv_window = nbad_qv_window + 1
-             case (5)
-                nbad_qc_window = nbad_qc_window + 1
-             case (6)
-                nbad_qi_window = nbad_qi_window + 1
-             case (7)
-                nbad_uv_window = nbad_uv_window + 1
-             case (8)
-                nbad_tke_window = nbad_tke_window + 1
-             end select
           enddo
-
-          nbad_pbl = count(pbl_col_bad(its:ite))
-          pbl_repair_total_local  = pbl_repair_total_local  + nbad_pbl
-          pbl_repair_window_local = pbl_repair_window_local + nbad_pbl
 
           do i = its, ite
              if (.not. pbl_col_bad(i)) cycle
@@ -2046,47 +1995,6 @@ endif
                 kpbl_p(i,jts) = max(kts, min(kte, kpbl_p(i,jts)))
              endif
           enddo
-
-          ! Print one compact LOCAL reason summary every 10000 model steps.
-          ! Each repaired column contributes to exactly one reason category.
-          if (mod(itimestep,10000) == 0) then
-             if (pbl_pressure_window_local + pbl_repair_window_local + &
-                 nqv_limited_window + nqc_limited_window + &
-                 nqi_limited_window > 0) then
-                write(0,'(A,I7,16(A,I7))') &
-                     'TKE-EDMF REPAIR REASONS step=', itimestep, &
-                     ' press=', pbl_pressure_window_local, &
-                     ' total=', pbl_repair_window_local, &
-                     ' nan=', nbad_nan_window, &
-                     ' hpbl=', nbad_hpbl_window, &
-                     ' t=', nbad_t_window, &
-                     ' qvbad=', nbad_qv_window, &
-                     ' qvlim=', nqv_limited_window, &
-                     ' qvlim_total=', nqv_limited_total, &
-                     ' qclim=', nqc_limited_window, &
-                     ' qclim_total=', nqc_limited_total, &
-                     ' qilim=', nqi_limited_window, &
-                     ' qilim_total=', nqi_limited_total, &
-                     ' qcbad=', nbad_qc_window, &
-                     ' qibad=', nbad_qi_window, &
-                     ' uv=', nbad_uv_window, &
-                     ' tke=', nbad_tke_window
-             endif
-
-             pbl_pressure_window_local = 0
-             pbl_repair_window_local   = 0
-             nbad_nan_window  = 0
-             nbad_hpbl_window = 0
-             nbad_t_window    = 0
-             nbad_qv_window   = 0
-             nqv_limited_window = 0
-             nqc_limited_window = 0
-             nqi_limited_window = 0
-             nbad_qc_window   = 0
-             nbad_qi_window   = 0
-             nbad_uv_window   = 0
-             nbad_tke_window  = 0
-          endif
        endif
 
        if (allocated(pbl_col_valid))   deallocate(pbl_col_valid)
@@ -2099,8 +2007,9 @@ endif
 
        if (tke_edmf_errflg /= 0) then
           write(*,*) 'FATAL in bl_tke_edmf: ', trim(tke_edmf_errmsg)
+!         Only bl_tke_edmf was started in this routine.  PBL Scheme is
+!         owned by the outer physics driver and must not be stopped here.
           call mpas_timer_stop('bl_tke_edmf')
-          call mpas_timer_stop('PBL Scheme')
           stop 1
        endif
 
