@@ -101,6 +101,11 @@ set(ATMOSPHERE_CORE_PHYSICS_WRF_SOURCES
     module_sf_mynn.F
     sf_mynn_pre.F
     sf_sfclayrev_pre.F
+    module_gfs_machine.F
+    module_gfs_physcons.F
+    module_gfs_funcphys.F
+    module_progtm.F
+    module_sf_gfs.F
 )
 
 list(TRANSFORM ATMOSPHERE_CORE_PHYSICS_WRF_SOURCES PREPEND physics/physics_wrf/)
