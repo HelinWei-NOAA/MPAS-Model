@@ -235,6 +235,11 @@
        if(.not.allocated(zbl_plume_p)   ) allocate(zbl_plume_p(ims:ime,jms:jme)         )
        if(.not.allocated(excessh_p)     ) allocate(excessh_p(ims:ime,jms:jme)           )
        if(.not.allocated(excessq_p)     ) allocate(excessq_p(ims:ime,jms:jme)           ) 
+       if(.not.allocated(maxwidth_dd_p) ) allocate(maxwidth_dd_p(ims:ime,jms:jme)       )
+       if(.not.allocated(maxmf_dd_p)    ) allocate(maxmf_dd_p(ims:ime,jms:jme)          )
+       if(.not.allocated(maxtkeprod_dd_p))allocate(maxtkeprod_dd_p(ims:ime,jms:jme)     )
+       if(.not.allocated(cldtop_cooling_p))allocate(cldtop_cooling_p(ims:ime,jms:jme)   )
+       if(.not.allocated(ent_eff_p)     ) allocate(ent_eff_p(ims:ime,jms:jme)           )
        
        if(.not.allocated(cov_p)         ) allocate(cov_p(ims:ime,kms:kme,jms:jme)       )
        if(.not.allocated(qke_p)         ) allocate(qke_p(ims:ime,kms:kme,jms:jme)       )
@@ -429,15 +434,20 @@
        if(allocated(pattern_spp_pbl)) deallocate(pattern_spp_pbl)
        
     case("bl_mynnedmf")
-       if(allocated(dx_p)          ) deallocate(dx_p          )
-       if(allocated(ch_p)          ) deallocate(ch_p          )
-       if(allocated(qsfc_p)        ) deallocate(qsfc_p        )
-       if(allocated(tsk_p)         ) deallocate(tsk_p         )
-       if(allocated(maxwidthbl_p)  ) deallocate(maxwidthbl_p  )
-       if(allocated(maxmfbl_p)     ) deallocate(maxmfbl_p     )
-       if(allocated(zbl_plume_p)   ) deallocate(zbl_plume_p   )
-       if(allocated(excessh_p)     ) deallocate(excessh_p     )                                                                                                         
-       if(allocated(excessq_p)     ) deallocate(excessq_p     )
+       if(allocated(dx_p)            ) deallocate(dx_p            )
+       if(allocated(ch_p)            ) deallocate(ch_p            )
+       if(allocated(qsfc_p)          ) deallocate(qsfc_p          )
+       if(allocated(tsk_p)           ) deallocate(tsk_p           )
+       if(allocated(maxwidthbl_p)    ) deallocate(maxwidthbl_p    )
+       if(allocated(maxmfbl_p)       ) deallocate(maxmfbl_p       )
+       if(allocated(zbl_plume_p)     ) deallocate(zbl_plume_p     )
+       if(allocated(excessh_p)       ) deallocate(excessh_p       )                                                                                                         
+       if(allocated(excessq_p)       ) deallocate(excessq_p       )
+       if(allocated(maxwidth_dd_p)   ) deallocate(maxwidth_dd_p   )
+       if(allocated(maxmf_dd_p)      ) deallocate(maxmf_dd_p      )
+       if(allocated(maxtkeprod_dd_p) ) deallocate(maxtkeprod_dd_p )
+       if(allocated(cldtop_cooling_p)) deallocate(cldtop_cooling_p)
+       if(allocated(ent_eff_p)       ) deallocate(ent_eff_p       )
        
        if(allocated(cov_p)       ) deallocate(cov_p       )
        if(allocated(qke_p)       ) deallocate(qke_p       )
@@ -543,10 +553,13 @@
  real(kind=RKIND),dimension(:,:),pointer:: sub_thl,sub_qv,det_thl,det_qv
 
 !local pointers for tke_edmf
-! tke is stored as scalars(5,k,i) for bl_tke_edmf_in.
+! Prognostic TKE index is obtained from the Registry-generated state dimension
+! index_tke.  Never hard-code a scalar slot here: scalar ordering changes when
+! hydrometeors/packages are added or reordered.
 
 !local pointers for chemistry
  integer,pointer                           :: chemistry_start,chemistry_end
+ integer,pointer                           :: index_tke
  real(kind=RKIND),dimension(:,:,:),pointer :: scalars
  real(kind=RKIND),dimension(:,:,:),pointer :: tend_chem_settle
  real(kind=RKIND),dimension(:,:  ),pointer :: ddvel
@@ -739,6 +752,7 @@
 ! Get the parent state scalar array and use scalar index 5 for tke.
 ! ------------------------------------------------------------------
        call mpas_pool_get_array(state,'scalars',scalars,1)
+       call mpas_pool_get_dimension(state,'index_tke',index_tke)
 
        do j = jts,jte
        do i = its,ite
@@ -758,9 +772,10 @@
 ! Do not read tke_pbl from MPAS here.  In some MPAS builds this
 ! diagnostic is not allocated before the TKE-EDMF call, and reading
 ! tke_pbl(k,i) causes the SIGSEGV seen near this block.  The wrapper
-! will update tkepbl_p and pbl_to_MPAS will write it back afterward.
+! advances TKE using rtg(:,:,ntke), updates tkepbl_p, and pbl_to_MPAS
+! writes that advanced prognostic state back to scalars(index_tke).
 !         tkepbl_p(i,k,j)   = 0.0_RKIND
-          tkepbl_p(i,k,j)   = max(1.0e-9_RKIND, scalars(5,k,i))
+          tkepbl_p(i,k,j)   = max(1.0e-9_RKIND, scalars(index_tke,k,i))
        enddo
        enddo
        enddo
@@ -936,11 +951,16 @@
 
        do j = jts,jte
        do i = its,ite
-          maxwidthbl_p(i,j) = 0._RKIND
-          maxmfbl_p(i,j)    = 0._RKIND
-          zbl_plume_p(i,j)  = 0._RKIND
-          excessh_p(i,j)    = 0._RKIND
-          excessq_p(i,j)    = 0._RKIND
+          maxwidthbl_p(i,j)    = 0._RKIND
+          maxmfbl_p(i,j)       = 0._RKIND
+          zbl_plume_p(i,j)     = 0._RKIND
+          excessh_p(i,j)       = 0._RKIND
+          excessq_p(i,j)       = 0._RKIND
+          maxwidth_dd_p(i,j)   = 0._RKIND
+          maxmf_dd_p(i,j)      = 0._RKIND
+          maxtkeprod_dd_p(i,j) = 0._RKIND
+          cldtop_cooling_p(i,j)= 0._RKIND
+          ent_eff_p(i,j)       = 0._RKIND
        enddo
        enddo
 
@@ -1046,6 +1066,7 @@
       
 !local pointers for MYNN scheme:
  real(kind=RKIND),dimension(:),pointer  :: maxmf,maxwidth,ztop_plume,excess_h,excess_q
+ real(kind=RKIND),dimension(:),pointer  :: maxmf_dd,maxwidth_dd,maxtkeprod_dd,cldtop_cooling,ent_eff
  real(kind=RKIND),dimension(:,:),pointer:: cov,qke,qsq,tsq,sh3d,sm3d,tke_pbl,qke_adv,el_pbl,dqke,qbuoy, &
                                            qdiss,qshear,qwt
  real(kind=RKIND),dimension(:,:),pointer:: cldfrac_bl,qc_bl,qi_bl
@@ -1053,7 +1074,8 @@
  real(kind=RKIND),dimension(:,:),pointer:: sub_thl,sub_qv,det_thl,det_qv
 
 !local pointers for tke_edmf
-! tke is stored as scalars(5,k,i) for bl_tke_edmf_in.
+! Prognostic TKE index is obtained from the Registry-generated state dimension
+! index_tke.  Never hard-code a scalar slot here.
 
 !local pointers for chemistry
  real(kind=RKIND),dimension(:,:,:),pointer:: scalars
@@ -1061,6 +1083,7 @@
  real(kind=RKIND),dimension(:,:,:),pointer:: tend_chem_settle
  real(kind=RKIND),dimension(:,:),pointer  :: ddvel
  integer,pointer :: chemistry_start,chemistry_end
+ integer,pointer :: index_tke
 
 !local pointers for MYJ scheme:
  real(kind=RKIND),dimension(:),pointer   :: thz0,qz0,uz0,vz0,akhs,akms,ct,mixht,qsfc,ust,znt
@@ -1136,18 +1159,18 @@ endif
 
     case("bl_tke_edmf")
 ! ------------------------------------------------------------------
-! Copy updated prognostic TKE back to MPAS state scalars.
-!
-! Registry order in var_array scalars for this configuration is:
-!   1=qv, 2=qc, 3=qr, 4=qi, 5=tke
-! This path is only active for bl_tke_edmf, so other PBL schemes are unchanged.
+! Copy updated prognostic TKE back to the Registry-defined TKE scalar.
+! Do not hard-code the scalar slot: in the current configuration index_tke
+! is outside moist_start:moist_end, while scalar slot 5 is a moist species.
+! This path is only active for bl_tke_edmf; other PBL schemes are unchanged.
 ! ------------------------------------------------------------------
        call mpas_pool_get_array(state,'scalars',scalars,1)
+       call mpas_pool_get_dimension(state,'index_tke',index_tke)
 
        do j = jts,jte
        do k = kts,kte
        do i = its,ite
-          scalars(5,k,i) = max(1.0e-9_RKIND, tkepbl_p(i,k,j))
+          scalars(index_tke,k,i) = max(1.0e-9_RKIND, tkepbl_p(i,k,j))
        enddo
        enddo
        enddo
@@ -1262,47 +1285,57 @@ endif
        endif
        
     case("bl_mynnedmf")
-       call mpas_pool_get_array(diag_physics,'maxmf'     ,maxmf     )
-       call mpas_pool_get_array(diag_physics,'maxwidth'  ,maxwidth  )
-       call mpas_pool_get_array(diag_physics,'ztop_plume',ztop_plume)
-       call mpas_pool_get_array(diag_physics,'excess_h'  ,excess_h  )
-       call mpas_pool_get_array(diag_physics,'excess_q'  ,excess_q  )
-       call mpas_pool_get_array(diag_physics,'el_pbl'    ,el_pbl    )
-       call mpas_pool_get_array(diag_physics,'cov'       ,cov       )
-       call mpas_pool_get_array(diag_physics,'qke'       ,qke       )
-       call mpas_pool_get_array(diag_physics,'qke_adv'   ,qke_adv   )
-       call mpas_pool_get_array(diag_physics,'qsq'       ,qsq       )
-       call mpas_pool_get_array(diag_physics,'tsq'       ,tsq       )
-       call mpas_pool_get_array(diag_physics,'sh3d'      ,sh3d      )
-       call mpas_pool_get_array(diag_physics,'sm3d'      ,sm3d      )
-       call mpas_pool_get_array(diag_physics,'dqke'      ,dqke      )
-       call mpas_pool_get_array(diag_physics,'qbuoy'     ,qbuoy     )
-       call mpas_pool_get_array(diag_physics,'qdiss'     ,qdiss     )
-       call mpas_pool_get_array(diag_physics,'qshear'    ,qshear    )
-       call mpas_pool_get_array(diag_physics,'qwt'       ,qwt       )
-       call mpas_pool_get_array(diag_physics,'cldfrac_bl',cldfrac_bl)
-       call mpas_pool_get_array(diag_physics,'qc_bl'     ,qc_bl     )
-       call mpas_pool_get_array(diag_physics,'qi_bl'     ,qi_bl     )
-       call mpas_pool_get_array(diag_physics,'edmf_a'    ,edmf_a    )
-       call mpas_pool_get_array(diag_physics,'edmf_ent'  ,edmf_ent  )
-       call mpas_pool_get_array(diag_physics,'edmf_qc'   ,edmf_qc   )
-       call mpas_pool_get_array(diag_physics,'edmf_qt'   ,edmf_qt   )
-       call mpas_pool_get_array(diag_physics,'edmf_thl'  ,edmf_thl  )
-       call mpas_pool_get_array(diag_physics,'edmf_w'    ,edmf_w    )
-       call mpas_pool_get_array(diag_physics,'sub_thl'   ,sub_thl   )
-       call mpas_pool_get_array(diag_physics,'sub_qv'    ,sub_qv    )
-       call mpas_pool_get_array(diag_physics,'det_thl'   ,det_thl   )
-       call mpas_pool_get_array(diag_physics,'det_qv'    ,det_qv    )
+       call mpas_pool_get_array(diag_physics,'maxmf'         ,maxmf         )
+       call mpas_pool_get_array(diag_physics,'maxwidth'      ,maxwidth      )
+       call mpas_pool_get_array(diag_physics,'ztop_plume'    ,ztop_plume    )
+       call mpas_pool_get_array(diag_physics,'excess_h'      ,excess_h      )
+       call mpas_pool_get_array(diag_physics,'excess_q'      ,excess_q      )
+       call mpas_pool_get_array(diag_physics,'maxmf_dd'      ,maxmf_dd      )
+       call mpas_pool_get_array(diag_physics,'maxwidth_dd'   ,maxwidth_dd   )
+       call mpas_pool_get_array(diag_physics,'maxtkeprod_dd' ,maxtkeprod_dd )
+       call mpas_pool_get_array(diag_physics,'cldtop_cooling',cldtop_cooling)
+       call mpas_pool_get_array(diag_physics,'ent_eff'       ,ent_eff       )
+       call mpas_pool_get_array(diag_physics,'el_pbl'        ,el_pbl        )
+       call mpas_pool_get_array(diag_physics,'cov'           ,cov           )
+       call mpas_pool_get_array(diag_physics,'qke'           ,qke           )
+       call mpas_pool_get_array(diag_physics,'qke_adv'       ,qke_adv       )
+       call mpas_pool_get_array(diag_physics,'qsq'           ,qsq           )
+       call mpas_pool_get_array(diag_physics,'tsq'           ,tsq           )
+       call mpas_pool_get_array(diag_physics,'sh3d'          ,sh3d          )
+       call mpas_pool_get_array(diag_physics,'sm3d'          ,sm3d          )
+       call mpas_pool_get_array(diag_physics,'dqke'          ,dqke          )
+       call mpas_pool_get_array(diag_physics,'qbuoy'         ,qbuoy         )
+       call mpas_pool_get_array(diag_physics,'qdiss'         ,qdiss         )
+       call mpas_pool_get_array(diag_physics,'qshear'        ,qshear        )
+       call mpas_pool_get_array(diag_physics,'qwt'           ,qwt           )
+       call mpas_pool_get_array(diag_physics,'cldfrac_bl'    ,cldfrac_bl    )
+       call mpas_pool_get_array(diag_physics,'qc_bl'         ,qc_bl         )
+       call mpas_pool_get_array(diag_physics,'qi_bl'         ,qi_bl         )
+       call mpas_pool_get_array(diag_physics,'edmf_a'        ,edmf_a        )
+       call mpas_pool_get_array(diag_physics,'edmf_ent'      ,edmf_ent      )
+       call mpas_pool_get_array(diag_physics,'edmf_qc'       ,edmf_qc       )
+       call mpas_pool_get_array(diag_physics,'edmf_qt'       ,edmf_qt       )
+       call mpas_pool_get_array(diag_physics,'edmf_thl'      ,edmf_thl      )
+       call mpas_pool_get_array(diag_physics,'edmf_w'        ,edmf_w        )
+       call mpas_pool_get_array(diag_physics,'sub_thl'       ,sub_thl       )
+       call mpas_pool_get_array(diag_physics,'sub_qv'        ,sub_qv        )
+       call mpas_pool_get_array(diag_physics,'det_thl'       ,det_thl       )
+       call mpas_pool_get_array(diag_physics,'det_qv'        ,det_qv        )
 
-       call mpas_pool_get_array(tend_physics,'rqsblten'  ,rqsblten  )
+       call mpas_pool_get_array(tend_physics,'rqsblten'      ,rqsblten      )
 
        do j = jts,jte
        do i = its,ite
-          maxmf(i)      = maxmfbl_p(i,j)
-          maxwidth(i)   = maxwidthbl_p(i,j)
-          ztop_plume(i) = zbl_plume_p(i,j)
-          excess_h(i)   = excessh_p(i,j)
-          excess_q(i)   = excessq_p(i,j)
+          maxmf(i)         = maxmfbl_p(i,j)
+          maxwidth(i)      = maxwidthbl_p(i,j)
+          ztop_plume(i)    = zbl_plume_p(i,j)
+          excess_h(i)      = excessh_p(i,j)
+          excess_q(i)      = excessq_p(i,j)
+          maxmf_dd(i)      = maxmf_dd_p(i,j)
+          maxwidth_dd(i)   = maxwidth_dd_p(i,j)
+          maxtkeprod_dd(i) = maxtkeprod_dd_p(i,j)
+          cldtop_cooling(i)= cldtop_cooling_p(i,j)
+          ent_eff(i)       = ent_eff_p(i,j)
        enddo
        enddo
 
@@ -1490,6 +1523,7 @@ endif
                    spp_pbl
 
  real(kind=RKIND),pointer:: bl_mynn_closure
+ real(kind=RKIND), dimension(:), pointer :: coszr
 
 !local variables:
  integer:: initflag
@@ -1516,35 +1550,16 @@ endif
  integer, dimension(:,:), pointer :: cellsOnCell
  logical, allocatable :: pbl_col_valid(:), pbl_col_bad(:)
  logical, allocatable :: pbl_press_valid(:), pbl_press_bad(:)
- real(kind=RKIND), allocatable :: p_mid_tkeedmf(:,:), p_int_tkeedmf(:,:)
- integer :: n, nbr, ngood, nbad_pbl, nbad_press, bad_reason
- integer, save :: pbl_repair_total_local = 0
- integer, save :: pbl_repair_window_local = 0
- integer, save :: pbl_pressure_total_local = 0
- integer, save :: pbl_pressure_window_local = 0
- integer, save :: nbad_nan_window  = 0
- integer, save :: nbad_hpbl_window = 0
- integer, save :: nbad_t_window    = 0
- integer, save :: nbad_qv_window   = 0
- integer, save :: nqv_limited_window = 0
- integer, save :: nqv_limited_total  = 0
- integer, save :: nqc_limited_window = 0
- integer, save :: nqc_limited_total  = 0
- integer, save :: nqi_limited_window = 0
- integer, save :: nqi_limited_total  = 0
- integer, save :: nbad_qc_window   = 0
- integer, save :: nbad_qi_window   = 0
- integer, save :: nbad_uv_window   = 0
- integer, save :: nbad_tke_window  = 0
+ real(kind=RKIND), allocatable :: p_mid_tkeedmf(:,:), p_int_tkeedmf(:,:), pi_tkeedmf(:,:)
+ integer :: n, nbr, ngood, bad_reason
  real(kind=RKIND) :: t_after, qv_after, qc_after, qi_after
  real(kind=RKIND) :: min_dp_press, p_lower, p_upper
  real(kind=RKIND) :: u_after, v_after
  real(kind=RKIND) :: sum_hpbl
  integer :: sum_kpbl
 
+
 !-----------------------------------------------------------------------------------------------------------------
-!call mpas_log_write('')
-!call mpas_log_write('--- enter subroutine driver_pbl:')
 
 !initialization of CCPP-compliant flags:
  errmsg = ' '
@@ -1599,11 +1614,13 @@ endif
 
        call mpas_pool_get_array(mesh,'nEdgesOnCell',nEdgesOnCell)
        call mpas_pool_get_array(mesh,'cellsOnCell' ,cellsOnCell )
+       call mpas_pool_get_array(diag_physics,'coszr',coszr)
 
        allocate(pbl_col_valid(ims:ime), pbl_col_bad(ims:ime))
        allocate(pbl_press_valid(ims:ime), pbl_press_bad(ims:ime))
        allocate(p_mid_tkeedmf(its:ite,kts:kte))
        allocate(p_int_tkeedmf(its:ite,kts:kte+1))
+       allocate(pi_tkeedmf(its:ite,kts:kte))
        pbl_col_valid   = .false.
        pbl_col_bad     = .false.
        pbl_press_valid = .false.
@@ -1645,7 +1662,12 @@ endif
 
        do j = jts,jte
        do i = its,ite
-          coszen_tkeedmf_p(i,j) = 1.0_RKIND
+          ! MPAS shortwave radiation stores coszr as the cosine of the
+          ! solar zenith angle evaluated at the radiation-call midpoint.
+          ! Pass it to the TKE-EDMF adapter as the radiation reference
+          ! solar-zenith quantity; the wrapper uses it for day/night and
+          ! a neutral temporal-adjustment approximation (xmu=1 by day).
+          coszen_tkeedmf_p(i,j) = max(coszr(i), 0.0_RKIND)
           lh_tkeedmf_p(i,j) = qfx_p(i,j) * xlv
           stress_tkeedmf_p(i,j) = ust_p(i,j) * ust_p(i,j)
 
@@ -1663,14 +1685,17 @@ endif
        enddo
        enddo
        !---------------------------------------------------------------
-       ! TEST: repair a pressure column before TKE-EDMF only when the
-       ! interface pressure is non-finite, non-positive, or fails to
-       ! decrease upward.  The repair uses actual MPAS cellsOnCell
-       ! neighbors.  The MPAS pressure state itself is not overwritten;
-       ! only these temporary arrays are passed to the PBL wrapper.
+       ! Restore the previously working 60-km pressure-column repair
+       ! before the GFS TKE-EDMF call.
+       !
+       ! Repair only temporary PBL pressure arrays when the native MPAS
+       ! pressure column is non-finite, non-positive, non-monotonic, or
+       ! has a layer midpoint outside its bounding interfaces.  The MPAS
+       ! model state itself is NOT modified.
        !---------------------------------------------------------------
        p_mid_tkeedmf(:,:) = pres_hyd_p(its:ite,kts:kte,jts)
        p_int_tkeedmf(:,:) = pres2_hyd_p(its:ite,kts:kte+1,jts)
+       pi_tkeedmf(:,:)     = pi_p(its:ite,kts:kte,jts)
 
        ! Determine valid pressure profiles for owned and halo cells so
        ! that a bad owned cell can use valid physical neighbors.
@@ -1683,6 +1708,7 @@ endif
                 pbl_press_valid(i) = .false.
                 exit
              endif
+
              if (pres2_hyd_p(i,k,jts) <= 0.0_RKIND .or. &
                  pres2_hyd_p(i,k+1,jts) <= 0.0_RKIND .or. &
                  pres2_hyd_p(i,k+1,jts) >= pres2_hyd_p(i,k,jts) .or. &
@@ -1697,9 +1723,7 @@ endif
        do i = its, ite
           pbl_press_bad(i) = .not. pbl_press_valid(i)
        enddo
-       nbad_press = count(pbl_press_bad(its:ite))
-       pbl_pressure_total_local  = pbl_pressure_total_local  + nbad_press
-       pbl_pressure_window_local = pbl_pressure_window_local + nbad_press
+
 
        do i = its, ite
           if (.not. pbl_press_bad(i)) cycle
@@ -1727,7 +1751,7 @@ endif
                   real(ngood,RKIND)
           else
              ! Emergency fallback when no valid neighbor is locally
-             ! available.  Preserve the original surface interface and
+             ! available. Preserve the original surface interface and
              ! force a minimally monotonic profile only for this PBL call.
              p_int_tkeedmf(i,kts) = max(100.0_RKIND, &
                   pres2_hyd_p(i,kts,jts))
@@ -1743,10 +1767,12 @@ endif
           do k = kts, kte
              p_lower = p_int_tkeedmf(i,k)
              p_upper = p_int_tkeedmf(i,k+1)
+
              if (p_upper >= p_lower-min_dp_press) then
                 p_upper = max(1.0_RKIND,p_lower-min_dp_press)
                 p_int_tkeedmf(i,k+1) = p_upper
              endif
+
              if (p_mid_tkeedmf(i,k) >= p_lower .or. &
                  p_mid_tkeedmf(i,k) <= p_upper .or. &
                  .not. ieee_is_finite(p_mid_tkeedmf(i,k))) then
@@ -1754,10 +1780,6 @@ endif
              endif
           enddo
        enddo
-
-       ! Quiet test: pressure repair remains active, but its routine
-       ! per-step diagnostic is suppressed.  Only the post-PBL neighbor
-       ! repair count is printed below.
 
        call mpas_call_satmedmfvdifq(                                  &
             (ite-its+1), (kte-kts+1), 4, dt_pbl,                      &
@@ -1773,7 +1795,7 @@ endif
             tkepbl_p(its:ite,kts:kte,jts),                            &
             p_mid_tkeedmf(its:ite,kts:kte),                            &
             p_int_tkeedmf(its:ite,kts:kte+1),                         &
-            pi_p(its:ite,kts:kte,jts),                                &
+            pi_tkeedmf(its:ite,kts:kte),                              &
             rthraten_p(its:ite,kts:kte,jts),                          &
             exch_p(its:ite,kts:kte,jts),                              &
             coszen_tkeedmf_p(its:ite,jts),                            &
@@ -1799,7 +1821,7 @@ endif
             tke_edmf_cfg, tke_edmf_errmsg, tke_edmf_errflg)
 
        !-----------------------------------------------------------------
-       ! TEST: identify columns for which the returned TKE-EDMF tendency
+       ! Safeguard: identify columns for which the returned TKE-EDMF tendency
        ! would produce a non-finite or clearly unphysical one-step state.
        ! Do not modify valid columns.  For a bad column, replace the full
        ! PBL tendency profile with the mean from valid cellsOnCell neighbors.
@@ -1833,7 +1855,7 @@ endif
 
                    ! rthblten is potential-temperature tendency. Convert the
                    ! one-step impact to physical temperature with Exner pi_p.
-                   t_after  = t_p(i,k,jts)  + dt_pbl*pi_p(i,k,jts)*rthblten_p(i,k,jts)
+                   t_after  = t_p(i,k,jts)  + dt_pbl*pi_tkeedmf(i,k)*rthblten_p(i,k,jts)
                    qv_after = qv_p(i,k,jts) + dt_pbl*rqvblten_p(i,k,jts)
                    qc_after = qc_p(i,k,jts) + dt_pbl*rqcblten_p(i,k,jts)
                    qi_after = qi_p(i,k,jts) + dt_pbl*rqiblten_p(i,k,jts)
@@ -1867,8 +1889,6 @@ endif
                       rqvblten_p(i,k,jts) = -qv_p(i,k,jts) / &
                            max(dt_pbl, tiny(1.0_RKIND))
                       qv_after = qv_p(i,k,jts) + dt_pbl*rqvblten_p(i,k,jts)
-                      nqv_limited_window = nqv_limited_window + 1
-                      nqv_limited_total  = nqv_limited_total  + 1
 
                       ! Only a nonfinite or materially positive-overflow state
                       ! remains a reason for whole-column neighbor repair.
@@ -1885,8 +1905,6 @@ endif
                       rqcblten_p(i,k,jts) = -qc_p(i,k,jts) / &
                            max(dt_pbl, tiny(1.0_RKIND))
                       qc_after = qc_p(i,k,jts) + dt_pbl*rqcblten_p(i,k,jts)
-                      nqc_limited_window = nqc_limited_window + 1
-                      nqc_limited_total  = nqc_limited_total  + 1
                       if (.not. ieee_is_finite(qc_after)) then
                          bad_reason = 1
                          exit
@@ -1897,8 +1915,6 @@ endif
                       rqiblten_p(i,k,jts) = -qi_p(i,k,jts) / &
                            max(dt_pbl, tiny(1.0_RKIND))
                       qi_after = qi_p(i,k,jts) + dt_pbl*rqiblten_p(i,k,jts)
-                      nqi_limited_window = nqi_limited_window + 1
-                      nqi_limited_total  = nqi_limited_total  + 1
                       if (.not. ieee_is_finite(qi_after)) then
                          bad_reason = 1
                          exit
@@ -1917,31 +1933,7 @@ endif
 
              pbl_col_valid(i) = (bad_reason == 0)
              pbl_col_bad(i)   = .not. pbl_col_valid(i)
-
-             ! Count only the first failure reason for each repaired column.
-             select case (bad_reason)
-             case (1)
-                nbad_nan_window = nbad_nan_window + 1
-             case (2)
-                nbad_hpbl_window = nbad_hpbl_window + 1
-             case (3)
-                nbad_t_window = nbad_t_window + 1
-             case (4)
-                nbad_qv_window = nbad_qv_window + 1
-             case (5)
-                nbad_qc_window = nbad_qc_window + 1
-             case (6)
-                nbad_qi_window = nbad_qi_window + 1
-             case (7)
-                nbad_uv_window = nbad_uv_window + 1
-             case (8)
-                nbad_tke_window = nbad_tke_window + 1
-             end select
           enddo
-
-          nbad_pbl = count(pbl_col_bad(its:ite))
-          pbl_repair_total_local  = pbl_repair_total_local  + nbad_pbl
-          pbl_repair_window_local = pbl_repair_window_local + nbad_pbl
 
           do i = its, ite
              if (.not. pbl_col_bad(i)) cycle
@@ -2003,47 +1995,6 @@ endif
                 kpbl_p(i,jts) = max(kts, min(kte, kpbl_p(i,jts)))
              endif
           enddo
-
-          ! Print one compact LOCAL reason summary every 100 model steps.
-          ! Each repaired column contributes to exactly one reason category.
-          if (mod(itimestep,1000) == 0) then
-             if (pbl_pressure_window_local + pbl_repair_window_local + &
-                 nqv_limited_window + nqc_limited_window + &
-                 nqi_limited_window > 0) then
-                write(0,'(A,I7,16(A,I7))') &
-                     'TKE-EDMF REPAIR REASONS step=', itimestep, &
-                     ' press=', pbl_pressure_window_local, &
-                     ' total=', pbl_repair_window_local, &
-                     ' nan=', nbad_nan_window, &
-                     ' hpbl=', nbad_hpbl_window, &
-                     ' t=', nbad_t_window, &
-                     ' qvbad=', nbad_qv_window, &
-                     ' qvlim=', nqv_limited_window, &
-                     ' qvlim_total=', nqv_limited_total, &
-                     ' qclim=', nqc_limited_window, &
-                     ' qclim_total=', nqc_limited_total, &
-                     ' qilim=', nqi_limited_window, &
-                     ' qilim_total=', nqi_limited_total, &
-                     ' qcbad=', nbad_qc_window, &
-                     ' qibad=', nbad_qi_window, &
-                     ' uv=', nbad_uv_window, &
-                     ' tke=', nbad_tke_window
-             endif
-
-             pbl_pressure_window_local = 0
-             pbl_repair_window_local   = 0
-             nbad_nan_window  = 0
-             nbad_hpbl_window = 0
-             nbad_t_window    = 0
-             nbad_qv_window   = 0
-             nqv_limited_window = 0
-             nqc_limited_window = 0
-             nqi_limited_window = 0
-             nbad_qc_window   = 0
-             nbad_qi_window   = 0
-             nbad_uv_window   = 0
-             nbad_tke_window  = 0
-          endif
        endif
 
        if (allocated(pbl_col_valid))   deallocate(pbl_col_valid)
@@ -2052,11 +2003,13 @@ endif
        if (allocated(pbl_press_bad))   deallocate(pbl_press_bad)
        if (allocated(p_mid_tkeedmf))   deallocate(p_mid_tkeedmf)
        if (allocated(p_int_tkeedmf))   deallocate(p_int_tkeedmf)
+       if (allocated(pi_tkeedmf))      deallocate(pi_tkeedmf)
 
        if (tke_edmf_errflg /= 0) then
           write(*,*) 'FATAL in bl_tke_edmf: ', trim(tke_edmf_errmsg)
+!         Only bl_tke_edmf was started in this routine.  PBL Scheme is
+!         owned by the outer physics driver and must not be stopped here.
           call mpas_timer_stop('bl_tke_edmf')
-          call mpas_timer_stop('PBL Scheme')
           stop 1
        endif
 
@@ -2232,37 +2185,39 @@ endif
 
        call mpas_timer_start('bl_mynnedmf')
        call mynnedmf_driver( &
-                  f_qc       = f_qc         , f_qi       = f_qi        , f_qs        = f_qs             , &
-                  f_qoz      = f_qoz        , f_nc       = f_nc        , f_ni        = f_ni             , &
-                  f_nifa     = f_nifa       , f_nwfa     = f_nwfa      , f_nbca      = f_nbca           , &
-                  icloud_bl  = icloud_bl    , delt       = dt_pbl      , dx          = dx_p             , &
-                  xland      = xland_p      , ps         = psfc_p      , ts          = tsk_p            , &
-                  qsfc       = qsfc_p       , ust        = ust_p       , ch          = ch_p             , &
-                  hfx        = hfx_p        , qfx        = qfx_p       ,                                  &
-                  wspd       = wspd_p       , znt        = znt_p       , uoce        = uoce_p           , &
-                  voce       = voce_p       , dz         = dz_p        , u           = u_p              , &
-                  v          = v_p          , w          = w_p         , th          = th_p             , &
-                  tt         = t_p          , p          = pres_p      , exner       = pi_p             , &
-                  rho        = rho_p        , qv         = qv_p        , qc          = qc_p             , &
-                  qi         = qi_p         , qs         = qs_p        , ni          = ni_p             , &
-                  nc         = nc_p         , nifa       = nifa_p      , nwfa        = nwfa_p           , &
-                  rthraten   = rthraten_p   , pblh       = hpbl_p      , kpbl        = kpbl_p           , &
-                  cldfra_bl  = cldfrabl_p   , qc_bl      = qcbl_p      , qi_bl       = qibl_p           , &
-                  maxwidth   = maxwidthbl_p , maxmf      = maxmfbl_p   , ztop_plume  = zbl_plume_p      , &
-                  excess_h   = excessh_p    , excess_q   = excessq_p   ,                                  &
-                  qke        = qke_p        , qke_adv    = qkeadv_p    ,                                  &
-                  tsq        = tsq_p        , qsq        = qsq_p       , cov         = cov_p            , &
-                  el_pbl     = elpbl_p      , rublten    = rublten_p   , rvblten     = rvblten_p        , &
-                  rthblten   = rthblten_p   , rqvblten   = rqvblten_p  , rqcblten    = rqcblten_p       , &
-                  rqiblten   = rqiblten_p   , rqsblten   = rqsblten_p  , rniblten    = rniblten_p       , &
-                  rncblten   = rncblten_p   , rnwfablten = rnwfablten_p, rnifablten  = rnifablten_p     , &
-                  edmf_a     = edmfa_p      , edmf_w     = edmfw_p     , edmf_qt     = edmfqt_p         , &
-                  edmf_thl   = edmfthl_p    , edmf_ent   = edmfent_p   , edmf_qc     = edmfqc_p         , &
-                  sub_thl    = subthl_p     , sub_sqv    = subqv_p     , det_thl     = detthl_p         , &
-                  det_sqv    = detqv_p      , exch_h     = kzh_p       , exch_m      = kzm_p            , &
-                  dqke       = dqke_p       , qwt        = qwt_p       , qshear      = qshear_p         , &
-                  qbuoy      = qbuoy_p      , qdiss      = qdiss_p     , sh3d        = sh3d_p           , &
-                  sm3d       = sm3d_p       , spp_pbl    = spp_pbl     , pattern_spp = pattern_spp_pbl  , &
+                  f_qc       = f_qc         , f_qi         = f_qi           , f_qs          = f_qs             , &
+                  f_qoz      = f_qoz        , f_nc         = f_nc           , f_ni          = f_ni             , &
+                  f_nifa     = f_nifa       , f_nwfa       = f_nwfa         , f_nbca        = f_nbca           , &
+                  icloud_bl  = icloud_bl    , delt         = dt_pbl         , dx            = dx_p             , &
+                  xland      = xland_p      , ps           = psfc_p         , ts            = tsk_p            , &
+                  qsfc       = qsfc_p       , ust          = ust_p          , ch            = ch_p             , &
+                  hfx        = hfx_p        , qfx          = qfx_p          ,                                    &
+                  wspd       = wspd_p       , znt          = znt_p          , uoce          = uoce_p           , &
+                  voce       = voce_p       , dz           = dz_p           , u             = u_p              , &
+                  v          = v_p          , w            = w_p            , th            = th_p             , &
+                  tt         = t_p          , p            = pres_p         , exner         = pi_p             , &
+                  rho        = rho_p        , qv           = qv_p           , qc            = qc_p             , &
+                  qi         = qi_p         , qs           = qs_p           , ni            = ni_p             , &
+                  nc         = nc_p         , nifa         = nifa_p         , nwfa          = nwfa_p           , &
+                  rthraten   = rthraten_p   , pblh         = hpbl_p         , kpbl          = kpbl_p           , &
+                  cldfra_bl  = cldfrabl_p   , qc_bl        = qcbl_p         , qi_bl         = qibl_p           , &
+                  maxwidth   = maxwidthbl_p , maxmf        = maxmfbl_p      , ztop_plume    = zbl_plume_p      , &
+                  excess_h   = excessh_p    , excess_q     = excessq_p      , maxwidth_dd   = maxwidth_dd_p    , &
+                  maxmf_dd   = maxmf_dd_p   , maxtkeprod   = maxtkeprod_dd_p, cldtop_cooling= cldtop_cooling_p , &
+                  ent_eff    = ent_eff_p    ,                                                                    &
+                  qke        = qke_p        , qke_adv      = qkeadv_p       ,                                    &
+                  tsq        = tsq_p        , qsq          = qsq_p          , cov           = cov_p            , &
+                  el_pbl     = elpbl_p      , rublten      = rublten_p      , rvblten       = rvblten_p        , &
+                  rthblten   = rthblten_p   , rqvblten     = rqvblten_p     , rqcblten      = rqcblten_p       , &
+                  rqiblten   = rqiblten_p   , rqsblten     = rqsblten_p     , rniblten      = rniblten_p       , &
+                  rncblten   = rncblten_p   , rnwfablten   = rnwfablten_p   , rnifablten    = rnifablten_p     , &
+                  edmf_a     = edmfa_p      , edmf_w       = edmfw_p        , edmf_qt       = edmfqt_p         , &
+                  edmf_thl   = edmfthl_p    , edmf_ent     = edmfent_p      , edmf_qc       = edmfqc_p         , &
+                  sub_thl    = subthl_p     , sub_sqv      = subqv_p        , det_thl       = detthl_p         , &
+                  det_sqv    = detqv_p      , exch_h       = kzh_p          , exch_m        = kzm_p            , &
+                  dqke       = dqke_p       , qwt          = qwt_p          , qshear        = qshear_p         , &
+                  qbuoy      = qbuoy_p      , qdiss        = qdiss_p        , sh3d          = sh3d_p           , &
+                  sm3d       = sm3d_p       , spp_pbl      = spp_pbl        , pattern_spp   = pattern_spp_pbl  , &
                   do_restart         = config_do_restart   ,                                              &
                   do_DAcycling       = config_do_DAcycling ,                                              &
                   initflag           = initflag            ,                                              &

@@ -2,6 +2,7 @@ module mpas_satmedmfvdifq_wrapper_mod
 
   use mpas_kind_types, only: RKIND
   use satmedmfvdifq, only: satmedmfvdifq_run
+  use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
   implicit none
 
   type mpas_satmedmfvdifq_config_type
@@ -22,8 +23,8 @@ module mpas_satmedmfvdifq_wrapper_mod
     real(kind=RKIND) :: xkzm_h = 1.0_RKIND
     real(kind=RKIND) :: xkzm_s = 1.0_RKIND
     real(kind=RKIND) :: dspfac = 1.0_RKIND
-    real(kind=RKIND) :: bl_upfr = 0.07_RKIND
-    real(kind=RKIND) :: bl_dnfr = 0.05_RKIND
+    real(kind=RKIND) :: bl_upfr = 0.13_RKIND
+    real(kind=RKIND) :: bl_dnfr = 0.10_RKIND
     real(kind=RKIND) :: rlmx = 300.0_RKIND
     real(kind=RKIND) :: elmx = 300.0_RKIND
   end type mpas_satmedmfvdifq_config_type
@@ -97,6 +98,8 @@ contains
     real(kind=RKIND), parameter :: fv    = rv/rd - 1.0_RKIND
     real(kind=RKIND), parameter :: eps   = rd/rv
     real(kind=RKIND), parameter :: epsm1 = eps - 1.0_RKIND
+    real(kind=RKIND), parameter :: p0ref = 100000.0_RKIND
+    real(kind=RKIND), parameter :: kappa = rd/cp
     real(kind=RKIND), parameter :: z0lo = 0.1_RKIND
     real(kind=RKIND), parameter :: z0up = 1.0_RKIND
 
@@ -222,7 +225,13 @@ contains
         q1(i,k,ntke) = max(tke_mpas(i,kk), 1.0e-9_RKIND)
 
         prsl(i,k)  = p_mid(i,kk)
+
+        ! Use native MPAS Exner directly, matching the YSU input path.
+        ! GFS satmedmfvdifq forms pix = psk/prslk internally, so psk
+        ! below is computed independently from the surface-interface
+        ! pressure using the same p0=100000 Pa and kappa=Rd/Cp.
         prslk(i,k) = exner_mid(i,kk)
+
 
         ! UFS routine expects geopotential, not geometric height.
         phil(i,k) = grav * z_mid(i,kk)
@@ -243,14 +252,30 @@ contains
 
     do k = 1, km
       do i = 1, im
-        del(i,k) = abs(prsi(i,k) - prsi(i,k+1))
+        del(i,k) = prsi(i,k) - prsi(i,k+1)
+        if (.not. ieee_is_finite(del(i,k)) .or. del(i,k) <= 0.0_RKIND) then
+          errflg = 1
+          write(errmsg,'(A,I0,A,I0,A,ES14.6)') &
+               'mpas_call_satmedmfvdifq: non-positive del at i=', i, &
+               ', k=', k, ', del=', del(i,k)
+          return
+        endif
       enddo
     enddo
 
     do i = 1, im
       garea(i) = areaCell(i)
 
-      xmu(i) = max(coszen(i), 0.0_RKIND)
+      ! GFS defines xmu as xcosz/coszen, not coszen itself.  MPAS
+      ! currently provides the radiation-time coszr but not a separate
+      ! current-time xcosz to this PBL driver.  Until both are carried
+      ! through the interface, use the consistent approximation
+      ! xcosz=coszen: xmu=1 in daylight and 0 at night.
+      if (coszen(i) > 1.0e-4_RKIND) then
+        xmu(i) = 1.0_RKIND
+      else
+        xmu(i) = 0.0_RKIND
+      endif
 
       ! UFS code uses z0 = 0.01*zorl, so zorl is in cm.
       zorl(i) = max(z0_mpas(i), 1.0e-6_RKIND) * 100.0_RKIND
@@ -275,8 +300,10 @@ contains
       ! If MPAS does not have rbsoil, start neutral.
 !     rbsoil(i) = 0.0_RKIND
 
-      ! psk is surface Exner. Use lowest layer as fallback.
-      psk(i) = prslk(i,kk)
+      ! GFS psk is surface-interface Exner referenced to p0=100000 Pa.
+      ! It is NOT the lowest-model-layer Exner.  satmedmfvdifq uses
+      ! pix = psk/prslk = (ps/pk)**kappa.
+      psk(i) = (max(prsi(i,1),1.0_RKIND)/p0ref)**kappa
 
 ! MPAS vegfra_in is percent (0-100).
 ! GFS TKE-EDMF expects sigmaf as fraction (0-1).
@@ -333,7 +360,10 @@ contains
       do i = 1, im
         kk = kmap(i,k)
 
-        ten_t_out(i,kk) = tdt(i,k)/exner_mid(i,kk)
+        ! Convert physical-temperature tendency to MPAS potential-temperature
+        ! tendency using the Exner function from the SAME pressure column
+        ! that was supplied to TKE-EDMF.
+        ten_t_out(i,kk) = tdt(i,k)/prslk(i,k)
         ten_u_out(i,kk) = du(i,k)
         ten_v_out(i,kk) = dv(i,k)
 
@@ -341,7 +371,23 @@ contains
         ten_qc_out(i,kk) = rtg(i,k,ntcw)
         ten_qi_out(i,kk) = rtg(i,k,ntiw)
 
-        tke_mpas(i,kk) = max(q1(i,k,ntke), 0.0_RKIND)
+        ! satmedmfvdifq treats q1(:,:,ntke) as the INPUT prognostic TKE.
+        ! The updated TKE is returned as a tendency in rtg(:,:,ntke):
+        !   rtg(ntke) = (TKE_new - TKE_old) / dt
+        ! because rtg is initialized to zero in this wrapper.  Therefore
+        ! copy the advanced TKE state back to MPAS, not the unchanged q1.
+        if (ieee_is_finite(q1(i,k,ntke)) .and. &
+            ieee_is_finite(rtg(i,k,ntke))) then
+          ! Prognostic TKE coupling:
+          ! satmedmfvdifq returns d(TKE)/dt in rtg(:,:,ntke).
+          ! Do not copy q1 back unchanged.
+          tke_mpas(i,kk) = max(1.0e-9_RKIND, &
+                               q1(i,k,ntke) + dt*rtg(i,k,ntke))
+        else
+          errflg = 1
+          errmsg = 'Non-finite GFS TKE-EDMF prognostic TKE update'
+          return
+        endif
       enddo
     enddo
 
