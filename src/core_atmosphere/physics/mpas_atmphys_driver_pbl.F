@@ -1685,12 +1685,13 @@ endif
        enddo
        enddo
        !---------------------------------------------------------------
-       ! Pressure-column repair for the GFS TKE-EDMF call.
+       ! Restore the previously working 60-km pressure-column repair
+       ! before the GFS TKE-EDMF call.
        !
-       ! Repair only temporary PBL pressure arrays.  The MPAS model state
-       ! itself is NOT modified.  This version is explicitly non-finite
-       ! aware and guarantees a positive pressure thickness for every
-       ! layer, including the top layer k=kte.
+       ! Repair only temporary PBL pressure arrays when the native MPAS
+       ! pressure column is non-finite, non-positive, non-monotonic, or
+       ! has a layer midpoint outside its bounding interfaces.  The MPAS
+       ! model state itself is NOT modified.
        !---------------------------------------------------------------
        p_mid_tkeedmf(:,:) = pres_hyd_p(its:ite,kts:kte,jts)
        p_int_tkeedmf(:,:) = pres2_hyd_p(its:ite,kts:kte+1,jts)
@@ -1723,10 +1724,7 @@ endif
           pbl_press_bad(i) = .not. pbl_press_valid(i)
        enddo
 
-       ! First replace clearly bad owned columns with an average of valid
-       ! physical neighbors when possible.  If no valid neighbor exists,
-       ! start from the native surface interface when finite/positive;
-       ! otherwise use a conservative finite surface value.
+
        do i = its, ite
           if (.not. pbl_press_bad(i)) cycle
 
@@ -1752,93 +1750,32 @@ endif
              p_int_tkeedmf(i,kts:kte+1) = p_int_tkeedmf(i,kts:kte+1) / &
                   real(ngood,RKIND)
           else
-             if (ieee_is_finite(pres2_hyd_p(i,kts,jts)) .and. &
-                 pres2_hyd_p(i,kts,jts) > 0.0_RKIND) then
-                p_int_tkeedmf(i,kts) = pres2_hyd_p(i,kts,jts)
-             else
-                p_int_tkeedmf(i,kts) = 100000.0_RKIND
-             endif
-
-             ! Build a strictly decreasing positive interface profile.
-             ! Do not use MIN/MAX with a potentially NaN native pressure.
+             ! Emergency fallback when no valid neighbor is locally
+             ! available. Preserve the original surface interface and
+             ! force a minimally monotonic profile only for this PBL call.
+             p_int_tkeedmf(i,kts) = max(100.0_RKIND, &
+                  pres2_hyd_p(i,kts,jts))
              do k = kts, kte
-                p_lower = p_int_tkeedmf(i,k)
-
-                if (ieee_is_finite(pres2_hyd_p(i,k+1,jts)) .and. &
-                    pres2_hyd_p(i,k+1,jts) > 0.0_RKIND .and. &
-                    pres2_hyd_p(i,k+1,jts) < p_lower) then
-                   p_upper = pres2_hyd_p(i,k+1,jts)
-                else if (p_lower > 2.0_RKIND*min_dp_press) then
-                   p_upper = p_lower - min_dp_press
-                else
-                   p_upper = 0.5_RKIND*p_lower
-                endif
-
-                ! Enforce the requested minimum dp where pressure permits.
-                ! Near the model top, preserve positivity/monotonicity rather
-                ! than imposing the old 1-Pa floor, which could reverse dp.
-                if (p_lower > 2.0_RKIND*min_dp_press) then
-                   if (p_lower-p_upper < min_dp_press) &
-                        p_upper = p_lower-min_dp_press
-                else
-                   if (p_upper >= p_lower .or. p_upper <= 0.0_RKIND) &
-                        p_upper = 0.5_RKIND*p_lower
-                endif
-
-                p_int_tkeedmf(i,k+1) = p_upper
-                p_mid_tkeedmf(i,k) = 0.5_RKIND*(p_lower+p_upper)
+                p_int_tkeedmf(i,k+1) = min(p_int_tkeedmf(i,k)-min_dp_press, &
+                     max(1.0_RKIND,pres2_hyd_p(i,k+1,jts)))
+                p_mid_tkeedmf(i,k) = 0.5_RKIND * &
+                     (p_int_tkeedmf(i,k)+p_int_tkeedmf(i,k+1))
              enddo
           endif
-       enddo
 
-       ! Final guarantee pass over ALL owned columns, not only columns that
-       ! were initially marked bad.  Walk sequentially from bottom to top so
-       ! every repaired upper interface becomes the lower interface for the
-       ! next layer.  This catches NaN at k=1 and also validates k=kte.
-       do i = its, ite
-          if (.not. ieee_is_finite(p_int_tkeedmf(i,kts)) .or. &
-              p_int_tkeedmf(i,kts) <= 0.0_RKIND) then
-             if (ieee_is_finite(pres2_hyd_p(i,kts,jts)) .and. &
-                 pres2_hyd_p(i,kts,jts) > 0.0_RKIND) then
-                p_int_tkeedmf(i,kts) = pres2_hyd_p(i,kts,jts)
-             else
-                p_int_tkeedmf(i,kts) = 100000.0_RKIND
-             endif
-          endif
-
+          ! Final strict monotonicity and midpoint check after averaging.
           do k = kts, kte
              p_lower = p_int_tkeedmf(i,k)
              p_upper = p_int_tkeedmf(i,k+1)
 
-             if (.not. ieee_is_finite(p_lower) .or. p_lower <= 0.0_RKIND) then
-                ! This should only be reached after an unexpected upstream
-                ! corruption.  Re-anchor locally to a finite positive value.
-                if (k == kts) then
-                   p_lower = 100000.0_RKIND
-                else
-                   p_lower = max(2.0_RKIND*tiny(1.0_RKIND), &
-                                 0.5_RKIND*p_int_tkeedmf(i,k-1))
-                endif
-                p_int_tkeedmf(i,k) = p_lower
+             if (p_upper >= p_lower-min_dp_press) then
+                p_upper = max(1.0_RKIND,p_lower-min_dp_press)
+                p_int_tkeedmf(i,k+1) = p_upper
              endif
 
-             if (.not. ieee_is_finite(p_upper) .or. p_upper <= 0.0_RKIND .or. &
-                 p_upper >= p_lower) then
-                if (p_lower > 2.0_RKIND*min_dp_press) then
-                   p_upper = p_lower-min_dp_press
-                else
-                   p_upper = 0.5_RKIND*p_lower
-                endif
-             else if (p_lower > 2.0_RKIND*min_dp_press .and. &
-                      p_lower-p_upper < min_dp_press) then
-                p_upper = p_lower-min_dp_press
-             endif
-
-             p_int_tkeedmf(i,k+1) = p_upper
-
-             if (.not. ieee_is_finite(p_mid_tkeedmf(i,k)) .or. &
-                 p_mid_tkeedmf(i,k) >= p_lower .or. &
-                 p_mid_tkeedmf(i,k) <= p_upper) then
+             if (p_mid_tkeedmf(i,k) >= p_lower .or. &
+                 p_mid_tkeedmf(i,k) <= p_upper .or. &
+                 .not. ieee_is_finite(p_mid_tkeedmf(i,k))) then
                 p_mid_tkeedmf(i,k) = 0.5_RKIND*(p_lower+p_upper)
              endif
           enddo
