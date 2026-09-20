@@ -17,6 +17,7 @@
 
  module mpas_atmphys_interface
  use mpas_kind_types
+ use, intrinsic :: ieee_arithmetic, only : ieee_is_finite
  use mpas_pool_routines
 
  use mpas_atmphys_constants
@@ -297,6 +298,9 @@
 
  real(kind=RKIND):: z0,z1,z2,w1,w2
  real(kind=RKIND):: rho_a,rho1,rho2,tem1,tem2
+ real(kind=RKIND):: dp_hyd_raw,dp_hyd_use
+ real(kind=RKIND),parameter:: dp_hyd_min = 1.0_RKIND
+ real(kind=RKIND),parameter:: ptop_hyd_fallback = 1.0_RKIND
 
 !-----------------------------------------------------------------------------------------------------------------
 !call mpas_log_write('')
@@ -621,11 +625,31 @@
  do i = its,ite
     !pressure at w-points:
     k = kte+1
-    pres2_hyd_p(i,k,j)  = pres2_p(i,k,j)
+    ! Keep the safeguard at the MPAS-to-physics interface so every physics
+    ! package sees the same admissible moist hydrostatic pressure column.
+    ! The native MPAS state (rho_p, dz_p, pres2_p) is not modified.
+    if (ieee_is_finite(pres2_p(i,k,j)) .and. pres2_p(i,k,j) > 0.0_RKIND) then
+       pres2_hyd_p(i,k,j) = pres2_p(i,k,j)
+    else
+       pres2_hyd_p(i,k,j) = ptop_hyd_fallback
+    endif
+
+    ! Leave the existing dry/GWDO pressure path unchanged.
     pres2_hydd_p(i,k,j) = pres2_p(i,k,j)
+
     do k = kte,1,-1
        rho_a = rho_p(i,k,j) / (1.+qv_p(i,k,j))
-       pres2_hyd_p(i,k,j)  = pres2_hyd_p(i,k+1,j)  + gravity*rho_p(i,k,j)*dz_p(i,k,j)
+
+       ! Hydrostatic moist pressure thickness.  A positive finite dp is
+       ! required before pressure is exposed to any downstream physics.
+       dp_hyd_raw = gravity*rho_p(i,k,j)*dz_p(i,k,j)
+       if (ieee_is_finite(dp_hyd_raw) .and. dp_hyd_raw >= dp_hyd_min) then
+          dp_hyd_use = dp_hyd_raw
+       else
+          dp_hyd_use = dp_hyd_min
+       endif
+
+       pres2_hyd_p(i,k,j)  = pres2_hyd_p(i,k+1,j) + dp_hyd_use
        pres2_hydd_p(i,k,j) = pres2_hydd_p(i,k+1,j) + gravity*rho_a*dz_p(i,k,j)
     enddo
     !pressure at theta-points:

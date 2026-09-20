@@ -610,7 +610,6 @@
 
  integer:: i,j,k
  integer:: icount,initflag,sub3d
- integer:: nbad_sas_after
  logical:: bad_sas_tend_col
 
  real(kind=RKIND):: dx
@@ -625,7 +624,6 @@
 real(kind=RKIND),allocatable:: pres_mid_gfs_sas(:,:), pres_int_gfs_sas(:,:)
  real(kind=RKIND),allocatable:: tkeh_gfs_sas(:,:), maxmf_gfs_sas(:)
  logical, allocatable :: gfs_sas_bad_col(:,:)
-real(kind=RKIND) :: p_sfc_safe, p_top_safe, frac_safe
  logical:: do_mynnedmf_gfs_sas
  integer,allocatable:: kbot_sas(:), ktop_sas(:)
 
@@ -688,14 +686,6 @@ real(kind=RKIND) :: p_sfc_safe, p_top_safe, frac_safe
 !... initialization of initflag needed in the calls cu_tiedtke and cu_ntiedtke:
  initflag = 1
  if(config_do_restart .or. itimestep > 1) initflag = 0
-
- if (.not. allocated(gfs_sas_bad_col)) allocate(gfs_sas_bad_col(its:ite,jts:jte))
- gfs_sas_bad_col(:,:) = .false.
-
- ! NOTE:
- ! The hydrostatic pressure monotonicity check is GFS-SAMF/SAS-specific.
- ! Do not apply it before convection_select, otherwise MPAS default/GF/KF/Tiedtke
- ! cases can abort even though they are not using the GFS SAMF/SAS pressure path.
 
  convection_select: select case(convection_scheme)
 
@@ -821,12 +811,22 @@ real(kind=RKIND) :: p_sfc_safe, p_top_safe, frac_safe
       call mpas_timer_start('GFS scale-aware SAS')
       call mpas_pool_get_array(diag_physics,'hpbl',hpbl)
 
+      if (.not. allocated(gfs_sas_bad_col)) allocate(gfs_sas_bad_col(its:ite,jts:jte))
+      gfs_sas_bad_col(:,:) = .false.
+
       ! The GFS SAS wrapper expects interface height, z_int(im,km+1).
       ! MPAS convection local arrays provide layer thickness dz_p(im,km,j),
       ! so build a simple column interface-height array here for each j-slab.
-      if (.not. allocated(z_int_sas)) allocate(z_int_sas(its:ite,kts:kte+1))
+      if (.not. allocated(z_int_sas))          allocate(z_int_sas(its:ite,kts:kte+1))
+      if (.not. allocated(pres_mid_gfs_sas))   allocate(pres_mid_gfs_sas(its:ite,kts:kte))
+      if (.not. allocated(pres_int_gfs_sas))   allocate(pres_int_gfs_sas(its:ite,kts:kte+1))
+      if (.not. allocated(t_gfs_sas))          allocate(t_gfs_sas(its:ite,kts:kte))
+      if (.not. allocated(qv_gfs_sas))         allocate(qv_gfs_sas(its:ite,kts:kte))
+      if (.not. allocated(tkeh_gfs_sas))       allocate(tkeh_gfs_sas(its:ite,kts:kte+1))
+      if (.not. allocated(maxmf_gfs_sas))      allocate(maxmf_gfs_sas(its:ite))
 
       do j = jts, jte
+
          do i = its, ite
             z_int_sas(i,kts) = 0.0_RKIND
             do k = kts, kte
@@ -834,33 +834,11 @@ real(kind=RKIND) :: p_sfc_safe, p_top_safe, frac_safe
             enddo
          enddo
 
-         !---------------------------------------------------------------
-         ! GFS SAMF/SAS-specific bad-pressure column mask.
-         ! If the hydrostatic pressure column is non-monotonic or the mid-level
-         ! pressure is outside its two interfaces, skip only this column for GFS
-         ! SAMF/SAS.  Do not abort the whole run, and do not affect other
-         ! convection schemes.
-         !---------------------------------------------------------------
-         icount = 0
-         do i = its, ite
-            gfs_sas_bad_col(i,j) = .false.
-            do k = kts, kte
-               if (pres2_hyd_p(i,k,j) <= pres2_hyd_p(i,k+1,j)) then
-                  icount = icount + 1
-                  gfs_sas_bad_col(i,j) = .true.
-                  ! Detailed bad-pressure diagnostics intentionally suppressed.
-               endif
-
-               if ( (pres_hyd_p(i,k,j) > max(pres2_hyd_p(i,k,j),pres2_hyd_p(i,k+1,j))) .or. &
-                    (pres_hyd_p(i,k,j) < min(pres2_hyd_p(i,k,j),pres2_hyd_p(i,k+1,j))) ) then
-                  icount = icount + 1
-                  gfs_sas_bad_col(i,j) = .true.
-                  ! Detailed bad-pressure diagnostics intentionally suppressed.
-               endif
-            enddo
-         enddo
-
-         ! Bad-pressure columns remain masked, but routine summaries are suppressed.
+         ! Hydrostatic pressure is safeguarded once upstream in
+         ! MPAS_to_physics.  SAS consumes that common pressure directly;
+         ! the wrapper retains strict validity checks but does not repair it.
+         pres_mid_gfs_sas(:,:) = pres_hyd_p(its:ite,kts:kte,j)
+         pres_int_gfs_sas(:,:) = pres2_hyd_p(its:ite,kts:kte+1,j)
 
          ! Initialize MPAS cloud-base/cloud-top diagnostics before the wrapper.
          if (allocated(cubot_p)) cubot_p(its:ite,j) = real(kte+1, RKIND)
@@ -875,75 +853,13 @@ real(kind=RKIND) :: p_sfc_safe, p_top_safe, frac_safe
          ! to stage physical temperature.
          !---------------------------------------------------------------
 
-         ! Enforce zero GFS SAS tendencies/precipitation for bad-pressure columns.
-         do i = its, ite
-            if (gfs_sas_bad_col(i,j)) then
-               do k = kts, kte
-                  rthcuten_p(i,k,j) = 0._RKIND
-                  rqvcuten_p(i,k,j) = 0._RKIND
-                  rqccuten_p(i,k,j) = 0._RKIND
-                  rqicuten_p(i,k,j) = 0._RKIND
-                  rucuten_p(i,k,j)  = 0._RKIND
-                  rvcuten_p(i,k,j)  = 0._RKIND
-               enddo
-               raincv_p(i,j) = 0._RKIND
-               pratec_p(i,j) = 0._RKIND
-               cubot_p(i,j)  = 0._RKIND
-               cutop_p(i,j)  = 0._RKIND
-            endif
-         enddo
-
-         if (allocated(t_gfs_sas))     deallocate(t_gfs_sas)
-         if (allocated(qv_gfs_sas))    deallocate(qv_gfs_sas)
-         if (allocated(tkeh_gfs_sas))  deallocate(tkeh_gfs_sas)
-         if (allocated(maxmf_gfs_sas)) deallocate(maxmf_gfs_sas)
-         if (allocated(pres_mid_gfs_sas)) deallocate(pres_mid_gfs_sas)
-         if (allocated(pres_int_gfs_sas)) deallocate(pres_int_gfs_sas)
-         if (allocated(pres_mid_gfs_sas)) deallocate(pres_mid_gfs_sas)
-         if (allocated(pres_int_gfs_sas)) deallocate(pres_int_gfs_sas)
-         allocate(t_gfs_sas(its:ite,kts:kte))
-         allocate(qv_gfs_sas(its:ite,kts:kte))
-         allocate(tkeh_gfs_sas(its:ite,kts:kte+1))
-         allocate(maxmf_gfs_sas(its:ite))
-         allocate(pres_mid_gfs_sas(its:ite,kts:kte))
-         allocate(pres_int_gfs_sas(its:ite,kts:kte+1))
-
          do_mynnedmf_gfs_sas = (trim(pbl_scheme) == 'bl_tke_edmf' .or. &
                                 trim(pbl_scheme) == 'bl_mynnedmf')
          maxmf_gfs_sas(:) = 0._RKIND
          tkeh_gfs_sas(:,:) = 0._RKIND
 
-         ! Build local pressure arrays for the GFS SAMF call.
-         ! Bad-pressure columns are skipped after the call, but the wrapper
-         ! still needs safe monotonic pressure input to avoid a crash.
-         do i = its, ite
-            if (gfs_sas_bad_col(i,j)) then
-               p_sfc_safe = max(pres2_hyd_p(i,kts,j), pres_hyd_p(i,kts,j), 1000._RKIND)
-               p_top_safe = max(1._RKIND, min(pres2_hyd_p(i,kte+1,j), p_sfc_safe - 1._RKIND))
-               do k = kts, kte+1
-                  frac_safe = real(k-kts,RKIND) / real(kte+1-kts,RKIND)
-                  pres_int_gfs_sas(i,k) = p_sfc_safe - frac_safe * (p_sfc_safe - p_top_safe)
-               enddo
-               do k = kts, kte
-                  pres_mid_gfs_sas(i,k) = 0.5_RKIND * (pres_int_gfs_sas(i,k) + pres_int_gfs_sas(i,k+1))
-               enddo
-            else
-               do k = kts, kte+1
-                  pres_int_gfs_sas(i,k) = pres2_hyd_p(i,k,j)
-               enddo
-               do k = kts, kte
-                  pres_mid_gfs_sas(i,k) = pres_hyd_p(i,k,j)
-               enddo
-            endif
-         enddo
-
          do k = kts, kte
          do i = its, ite
-            if (gfs_sas_bad_col(i,j)) then
-               t_gfs_sas(i,k)  = min(400._RKIND, max(100._RKIND, t_p(i,k,j)))
-               qv_gfs_sas(i,k) = max(1.0e-12_RKIND, qv_p(i,k,j))
-               cycle
-            endif
             ! rthften_p and rqvften_p were prepared in convection_from_MPAS
             ! using the same staging pattern as cu_ntiedtke.
             ! rthften_p is already a physical temperature tendency.
@@ -1038,29 +954,6 @@ real(kind=RKIND) :: p_sfc_safe, p_top_safe, frac_safe
             cutop    = cutop_p(its:ite,j),                                  &
             ierr     = errflg, errmsg = errmsg )
 
-         ! Enforce zero GFS SAS tendencies/precipitation for bad-pressure columns.
-         do i = its, ite
-            if (gfs_sas_bad_col(i,j)) then
-               do k = kts, kte
-                  rthcuten_p(i,k,j) = 0._RKIND
-                  rqvcuten_p(i,k,j) = 0._RKIND
-                  rqccuten_p(i,k,j) = 0._RKIND
-                  rqicuten_p(i,k,j) = 0._RKIND
-                  rucuten_p(i,k,j)  = 0._RKIND
-                  rvcuten_p(i,k,j)  = 0._RKIND
-               enddo
-               raincv_p(i,j) = 0._RKIND
-               pratec_p(i,j) = 0._RKIND
-               cubot_p(i,j)  = 0._RKIND
-               cutop_p(i,j)  = 0._RKIND
-            endif
-         enddo
-
-         if (allocated(t_gfs_sas))     deallocate(t_gfs_sas)
-         if (allocated(qv_gfs_sas))    deallocate(qv_gfs_sas)
-         if (allocated(tkeh_gfs_sas))  deallocate(tkeh_gfs_sas)
-         if (allocated(maxmf_gfs_sas)) deallocate(maxmf_gfs_sas)
-
          if (errflg /= 0) call physics_error_fatal(trim(errmsg))
 
          !---------------------------------------------------------------
@@ -1073,8 +966,6 @@ real(kind=RKIND) :: p_sfc_safe, p_top_safe, frac_safe
          ! this physics step, zero convection tendencies/precip for that column
          ! only and continue the integration.
          !---------------------------------------------------------------
-         nbad_sas_after = 0
-
          do i = its, ite
             if (gfs_sas_bad_col(i,j)) cycle
 
@@ -1096,10 +987,6 @@ real(kind=RKIND) :: p_sfc_safe, p_top_safe, frac_safe
                     abs(rvcuten_p(i,k,j))  > max_rv_sas  .or. &
                     qv_after_sas /= qv_after_sas          .or. &
                     qv_after_sas < qv_floor_sas ) then
-
-                  if (.not. bad_sas_tend_col) then
-                     nbad_sas_after = nbad_sas_after + 1
-                  endif
 
                   bad_sas_tend_col = .true.
                endif
@@ -1130,7 +1017,13 @@ real(kind=RKIND) :: p_sfc_safe, p_top_safe, frac_safe
          cu_act_flag(its:ite,j) = raincv_p(its:ite,j) > 0._RKIND
       enddo
 
-      if (allocated(z_int_sas)) deallocate(z_int_sas)
+      if (allocated(z_int_sas))          deallocate(z_int_sas)
+      if (allocated(pres_mid_gfs_sas))   deallocate(pres_mid_gfs_sas)
+      if (allocated(pres_int_gfs_sas))   deallocate(pres_int_gfs_sas)
+      if (allocated(t_gfs_sas))          deallocate(t_gfs_sas)
+      if (allocated(qv_gfs_sas))         deallocate(qv_gfs_sas)
+      if (allocated(tkeh_gfs_sas))       deallocate(tkeh_gfs_sas)
+      if (allocated(maxmf_gfs_sas))      deallocate(maxmf_gfs_sas)
       call mpas_timer_stop('GFS scale-aware SAS')
 
     case("cu_tiedtke")
