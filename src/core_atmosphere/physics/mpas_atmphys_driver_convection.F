@@ -878,8 +878,27 @@ integer, dimension(:,:), pointer :: cellsOnCell_gfs
          tkeh_gfs_sas(:,:) = 0._RKIND
 
          if (config_gfs_sequential_physics) then
+            nullify(rublten_stage,rvblten_stage)
             call mpas_pool_get_array(tend_physics,'rublten',rublten_stage)
             call mpas_pool_get_array(tend_physics,'rvblten',rvblten_stage)
+            if (.not. associated(rublten_stage) .or. &
+                .not. associated(rvblten_stage)) then
+               write(0,*) 'TEST2 ERROR: momentum tendency pointer missing'
+               flush(0)
+               error stop 'TEST2 momentum tendency pointer missing'
+            endif
+            if (kts < lbound(rublten_stage,1) .or. &
+                kte > ubound(rublten_stage,1) .or. &
+                its < lbound(rublten_stage,2) .or. &
+                ite > ubound(rublten_stage,2) .or. &
+                kts < lbound(rvblten_stage,1) .or. &
+                kte > ubound(rvblten_stage,1) .or. &
+                its < lbound(rvblten_stage,2) .or. &
+                ite > ubound(rvblten_stage,2)) then
+               write(0,*) 'TEST2 ERROR: momentum tendency bounds mismatch'
+               flush(0)
+               error stop 'TEST2 momentum tendency bounds mismatch'
+            endif
          endif
 
          do k = kts, kte
@@ -894,12 +913,13 @@ integer, dimension(:,:), pointer :: cellsOnCell_gfs
             u_gfs_sas(i,k)  = u_p(i,k,j)
             v_gfs_sas(i,k)  = v_p(i,k,j)
             if (config_gfs_sequential_physics) then
-               ! PBL + GWD cumulative tendencies: stage once, inputs only.
-               ! No modifications to state or tend_physics.
-               t_gfs_sas(i,k) = t_p(i,k,j) + dt_dyn * &
-                    rthblten_p(i,k,j) * pi_p(i,k,j)
+               ! Stage PBL/shared-GWD tendencies only into SAS inputs.
+               ! Do not modify MPAS state or tend_physics.
+               ! Old working-driver approach: convection_from_MPAS
+               ! prepares these allocated local temperature/qv tendencies.
+               t_gfs_sas(i,k) = t_p(i,k,j) + dt_dyn * rthften_p(i,k,j)
                qv_gfs_sas(i,k) = max(0._RKIND, qv_p(i,k,j) + &
-                    dt_dyn * rqvblten_p(i,k,j))
+                    dt_dyn * rqvften_p(i,k,j))
                u_gfs_sas(i,k) = u_p(i,k,j) + dt_dyn * rublten_stage(k,i)
                v_gfs_sas(i,k) = v_p(i,k,j) + dt_dyn * rvblten_stage(k,i)
             endif
@@ -1383,9 +1403,8 @@ integer, dimension(:,:), pointer :: cellsOnCell_gfs
           ! existing MPAS convection pattern used by cu_ntiedtke.
           ! rthften_p is stored here as a physical temperature tendency
           ! because the theta tendency is multiplied by pi_p immediately.
-          rqvften_p(i,k,j) = rqvdynten(k,i) + rqvblten(k,i)
-          rthften_p(i,k,j) = (rthdynten(k,i) + rthblten(k,i) &
-                           + rthratenlw(k,i) + rthratensw(k,i)) * pi_p(i,k,j)
+          rqvften_p(i,k,j) = rqvblten(k,i)
+          rthften_p(i,k,j) = rthblten(k,i) * pi_p(i,k,j)
        enddo
        enddo
        enddo
