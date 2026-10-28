@@ -35,7 +35,7 @@ contains
                                      z_mid, z_int, areaCell,             &
                                      u_mpas, v_mpas, t_mpas,             &
                                      qv_mpas, qc_mpas, qi_mpas, tke_mpas,&
-                                     p_mid, p_int, exner_mid,            &
+                                     p_mid, p_int, exner_mid, exner_mpas, &
                                      sw_heat, lw_heat, coszen,           &
                                      skin_temp, shflx, lhflx, stress_in, &
                                      z0_mpas, u10, v10, vegfra_in, rb_in, fm_in, fh_in,    &
@@ -59,6 +59,7 @@ contains
     real(kind=RKIND), intent(in) :: p_mid(nCells,nVertLevels)
     real(kind=RKIND), intent(in) :: p_int(nCells,nVertLevels+1)
     real(kind=RKIND), intent(in) :: exner_mid(nCells,nVertLevels)
+    real(kind=RKIND), intent(in) :: exner_mpas(nCells,nVertLevels)
     real(kind=RKIND), intent(in) :: sw_heat(nCells,nVertLevels)
     real(kind=RKIND), intent(in) :: lw_heat(nCells,nVertLevels)
     real(kind=RKIND), intent(in) :: coszen(nCells)
@@ -226,10 +227,8 @@ contains
 
         prsl(i,k)  = p_mid(i,kk)
 
-        ! Use native MPAS Exner directly, matching the YSU input path.
-        ! GFS satmedmfvdifq forms pix = psk/prslk internally, so psk
-        ! below is computed independently from the surface-interface
-        ! pressure using the same p0=100000 Pa and kappa=Rd/Cp.
+        ! Exner consistent with the selected GFS pressure.
+        ! psk and prslk must use the same p0 and kappa.
         prslk(i,k) = exner_mid(i,kk)
 
 
@@ -372,10 +371,10 @@ contains
       do i = 1, im
         kk = kmap(i,k)
 
-        ! Convert physical-temperature tendency to MPAS potential-temperature
-        ! tendency using the Exner function from the SAME pressure column
-        ! that was supplied to TKE-EDMF.
-        ten_t_out(i,kk) = tdt(i,k)/prslk(i,k)
+        ! Convert GFS physical-temperature tendency (K/s) to the native
+        ! MPAS potential-temperature tendency (K/s). Do not use prslk,
+        ! which belongs to the GFS pressure column.
+        ten_t_out(i,kk) = tdt(i,k)/exner_mpas(i,kk)
         ten_u_out(i,kk) = du(i,k)
         ten_v_out(i,kk) = dv(i,k)
 

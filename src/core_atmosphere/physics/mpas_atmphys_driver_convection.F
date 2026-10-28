@@ -931,12 +931,18 @@ integer, dimension(:,:), pointer :: cellsOnCell_gfs
                v_gfs_sas(i,k) = v_p(i,k,j) + dt_dyn * rvblten_stage(k,i)
             endif
 
-            if (t_gfs_sas(i,k) /= t_gfs_sas(i,k)) then
-               write(0,*) 'NONFINITE T BEFORE GFS SAS'
-               write(0,*) 'i,j,k=', i,j,k
-               write(0,*) 'p_mid,t=', pres_mid_gfs_sas(i,k), &
-                    t_gfs_sas(i,k)
-               call flush(0)
+            ! Stop at the first invalid SAS temperature on this MPI rank.
+            ! Report source state and staged tendency, not every level.
+            if (.not. ieee_is_finite(t_gfs_sas(i,k))) then
+               write(0,*) 'FATAL: FIRST NONFINITE T BEFORE GFS SAS'
+               write(0,*) 'i,j,k=', i,j,k, &
+                    ' sequential=', config_gfs_sequential_physics
+               write(0,*) 't_p=', t_p(i,k,j), &
+                    ' rthften_p=', rthften_p(i,k,j), ' dt_dyn=', dt_dyn
+               write(0,*) 't_gfs_sas=', t_gfs_sas(i,k), &
+                    ' p_mid=', pres_mid_gfs_sas(i,k), ' pi_p=', pi_p(i,k,j)
+               flush(0)
+               error stop 'NONFINITE SAS INPUT TEMPERATURE'
             endif
          enddo
          enddo

@@ -1593,7 +1593,10 @@ endif
 ! MPAS cell connectivity is used only by the GFS pressure-repair input path.
  integer, dimension(:), pointer :: nEdgesOnCell
  integer, dimension(:,:), pointer :: cellsOnCell
- real(kind=RKIND), allocatable :: p_mid_tkeedmf(:,:), p_int_tkeedmf(:,:), pi_tkeedmf(:,:)
+ real(kind=RKIND), allocatable :: p_mid_tkeedmf(:,:), p_int_tkeedmf(:,:), pi_tkeedmf(:,:), pi_mpas_tkeedmf(:,:)
+ character(len=16) :: gfs_pressure_mode_env
+ integer :: gfs_pressure_mode_status
+ logical :: gfs_mynn_style_mode
 
 
 !-----------------------------------------------------------------------------------------------------------------
@@ -1656,6 +1659,7 @@ endif
        allocate(p_mid_tkeedmf(its:ite,kts:kte))
        allocate(p_int_tkeedmf(its:ite,kts:kte+1))
        allocate(pi_tkeedmf(its:ite,kts:kte))
+       allocate(pi_mpas_tkeedmf(its:ite,kts:kte))
 
        ! Conservative initial settings.  Expose these through Registry later.
        tke_edmf_cfg%sa3dtke     = .false.
@@ -1717,18 +1721,41 @@ endif
        !---------------------------------------------------------------
        ! Repair pressure only for the GFS TKE-EDMF temporary input arrays.
        ! Native pres_hyd_p/pres2_hyd_p remain unchanged for other physics.
-       if (gfs_fixed_base_mode()) then
+       ! Mode 2: MYNN-style MPAS thermodynamic coupling.
+       ! Keep the native MPAS Exner for the GFS physics interface.
+       ! The GFS scheme still needs valid hydrostatic interface pressures;
+       ! retain the existing repair as a safeguard for positive dp.
+       gfs_pressure_mode_env = ' '
+       call get_environment_variable('MPAS_GFS_PRESSURE_MODE', &
+            gfs_pressure_mode_env, status=gfs_pressure_mode_status)
+       gfs_mynn_style_mode = (gfs_pressure_mode_status == 0 .and. &
+                             trim(adjustl(gfs_pressure_mode_env)) == '2')
+
+       if (gfs_mynn_style_mode) then
+          call repair_gfs_pressure_columns(                           &
+     &         pres_hyd_p(its:ite,kts:kte,jts),                       &
+     &         pres2_hyd_p(its:ite,kts:kte+1,jts),                    &
+     &         p_mid_tkeedmf, p_int_tkeedmf,                          &
+     &         nEdgesOnCell, cellsOnCell, its, ite, kts, kte)
+          pi_tkeedmf(:,:) = pi_p(its:ite,kts:kte,jts)
+       else if (gfs_fixed_base_mode()) then
           p_mid_tkeedmf(:,:) = pres_base_mid_gfs_p(its:ite,kts:kte,jts)
           p_int_tkeedmf(:,:) = pres_base_int_gfs_p(its:ite,kts:kte+1,jts)
+          pi_tkeedmf(:,:) = &
+             (max(p_mid_tkeedmf(:,:),1.0_RKIND)/100000.0_RKIND) ** &
+             (287.05_RKIND/1004.6_RKIND)
        else
-       call repair_gfs_pressure_columns(                           &
-     &      pres_hyd_p(its:ite,kts:kte,jts),                         &
-     &      pres2_hyd_p(its:ite,kts:kte+1,jts),                      &
-     &      p_mid_tkeedmf, p_int_tkeedmf,                            &
-     &      nEdgesOnCell, cellsOnCell,                              &
-     &      its, ite, kts, kte)
+          call repair_gfs_pressure_columns(                           &
+     &         pres_hyd_p(its:ite,kts:kte,jts),                       &
+     &         pres2_hyd_p(its:ite,kts:kte+1,jts),                    &
+     &         p_mid_tkeedmf, p_int_tkeedmf,                          &
+     &         nEdgesOnCell, cellsOnCell, its, ite, kts, kte)
+          pi_tkeedmf(:,:) = &
+             (max(p_mid_tkeedmf(:,:),1.0_RKIND)/100000.0_RKIND) ** &
+             (287.05_RKIND/1004.6_RKIND)
        endif
-       pi_tkeedmf(:,:) = pi_p(its:ite,kts:kte,jts)
+       ! Native MPAS Exner for mapping dT/dt back to dtheta/dt.
+       pi_mpas_tkeedmf(:,:) = pi_p(its:ite,kts:kte,jts)
 
        call mpas_call_satmedmfvdifq(                                  &
             (ite-its+1), (kte-kts+1), 4, dt_pbl,                      &
@@ -1745,6 +1772,7 @@ endif
             p_mid_tkeedmf(its:ite,kts:kte),                            &
             p_int_tkeedmf(its:ite,kts:kte+1),                         &
             pi_tkeedmf(its:ite,kts:kte),                              &
+            pi_mpas_tkeedmf(its:ite,kts:kte),                         &
             rthraten_p(its:ite,kts:kte,jts),                          &
             exch_p(its:ite,kts:kte,jts),                              &
             coszen_tkeedmf_p(its:ite,jts),                            &
@@ -1776,6 +1804,7 @@ endif
        if (allocated(p_mid_tkeedmf))   deallocate(p_mid_tkeedmf)
        if (allocated(p_int_tkeedmf))   deallocate(p_int_tkeedmf)
        if (allocated(pi_tkeedmf))      deallocate(pi_tkeedmf)
+       if (allocated(pi_mpas_tkeedmf)) deallocate(pi_mpas_tkeedmf)
 
        if (tke_edmf_errflg /= 0) then
           write(*,*) 'FATAL in bl_tke_edmf: ', trim(tke_edmf_errmsg)
