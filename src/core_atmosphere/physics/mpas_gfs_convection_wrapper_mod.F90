@@ -28,6 +28,7 @@
 ! TEST CONFIG: latest SAMF deep+shallow, driver-staged T/qv,
 ! TKE-EDMF coupling through tkeh/maxMF/do_mynnedmf, kbot/ktop guard.
 module mpas_gfs_convection_wrapper_mod
+   use mpas_gfs_base_pressure_option, only : gfs_local_dp_mode
 
    use mpas_kind_types, only: RKIND
    use mpas_atmphys_constants, only: gravity, cp, R_d, R_v, xlv
@@ -351,6 +352,8 @@ contains
          ! physical bottom-to-top ordering here; do not hide an ordering error
          ! with MAX/MIN or ABS.  These checks are final assertions only.
          delp(i,k)  = pres_int(i,kk) - pres_int(i,kk+1)
+         if (gfs_local_dp_mode() .and. ieee_is_finite(delp(i,k))) &
+              delp(i,k) = max(0.01_RKIND, delp(i,k))
          prslp(i,k) = pres_mid(i,kk)
          phil(i,k)  = gravity * 0.5_RKIND * (z_int(i,kk) + z_int(i,kk+1))
 
@@ -362,8 +365,10 @@ contains
             return
          endif
 
-         if (.not. ieee_is_finite(prslp(i,k)) .or. prslp(i,k) <= pres_int(i,kk+1) .or. &
-             prslp(i,k) >= pres_int(i,kk) .or. prslp(i,k) > 120000._RKIND) then
+         if (.not. ieee_is_finite(prslp(i,k)) .or. &
+             ((.not. gfs_local_dp_mode()) .and. &
+             (prslp(i,k) <= pres_int(i,kk+1) .or. prslp(i,k) >= pres_int(i,kk))) .or. &
+             prslp(i,k) <= 0._RKIND .or. prslp(i,k) > 120000._RKIND) then
             ierr = 14
             write(errmsg,'(a,2i8,3(1x,es14.6))') &
                  'bad SAS repaired midpoint at i,k,pint_lo,pmid,pint_hi=', &

@@ -9,8 +9,8 @@
  module mpas_atmphys_driver_pbl
  use mpas_kind_types
  use mpas_pool_routines
- use mpas_gfs_pressure_repair, only : repair_gfs_pressure_columns
- use mpas_gfs_base_pressure_option, only : gfs_fixed_base_mode
+ use mpas_gfs_pressure_repair, only : repair_gfs_pressure_columns, limit_gfs_pressure_thickness
+ use mpas_gfs_base_pressure_option, only : gfs_fixed_base_mode, gfs_local_dp_mode
  use mpas_timer,only: mpas_timer_start,mpas_timer_stop
  use, intrinsic :: ieee_arithmetic, only : ieee_is_finite
 
@@ -1731,7 +1731,12 @@ endif
        gfs_mynn_style_mode = (gfs_pressure_mode_status == 0 .and. &
                              trim(adjustl(gfs_pressure_mode_env)) == '2')
 
-       if (gfs_mynn_style_mode) then
+       if (gfs_local_dp_mode()) then
+          ! MYNN treatment: preserve input pressures; clip only del in wrapper.
+          p_mid_tkeedmf(:,:) = pres_hyd_p(its:ite,kts:kte,jts)
+          p_int_tkeedmf(:,:) = pres2_hyd_p(its:ite,kts:kte+1,jts)
+          pi_tkeedmf(:,:) = pi_p(its:ite,kts:kte,jts)
+       else if (gfs_mynn_style_mode) then
           call repair_gfs_pressure_columns(                           &
      &         pres_hyd_p(its:ite,kts:kte,jts),                       &
      &         pres2_hyd_p(its:ite,kts:kte+1,jts),                    &

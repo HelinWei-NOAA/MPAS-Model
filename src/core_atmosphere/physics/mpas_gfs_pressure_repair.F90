@@ -4,6 +4,7 @@ module mpas_gfs_pressure_repair
  implicit none
  private
  public :: repair_gfs_pressure_columns
+ public :: limit_gfs_pressure_thickness
 
 contains
 
@@ -142,4 +143,43 @@ contains
 
    deallocate(press_valid)
  end subroutine repair_gfs_pressure_columns
+
+ ! Local MYNN-inspired thickness limiter. No horizontal neighbor substitution.
+ ! Uses the existing MPAS physics pressure interfaces; native arrays are read-only.
+ subroutine limit_gfs_pressure_thickness(p_mid_native,p_int_native, &
+                                        p_mid_gfs,p_int_gfs,its,ite,kts,kte)
+   integer,intent(in) :: its,ite,kts,kte
+   real(kind=RKIND),intent(in) :: p_mid_native(its:ite,kts:kte)
+   real(kind=RKIND),intent(in) :: p_int_native(its:ite,kts:kte+1)
+   real(kind=RKIND),intent(out) :: p_mid_gfs(its:ite,kts:kte)
+   real(kind=RKIND),intent(out) :: p_int_gfs(its:ite,kts:kte+1)
+   integer :: i,k
+   real(kind=RKIND) :: dp,low,mid,upper
+   real(kind=RKIND),parameter :: min_dp=0.01_RKIND
+   do i=its,ite
+      low=p_int_native(i,kts)
+      if (.not.ieee_is_finite(low) .or. low <= 0.0_RKIND) low=100000.0_RKIND
+      p_int_gfs(i,kts)=low
+      do k=kts,kte
+         upper=p_int_native(i,k+1)
+         dp=min_dp
+         if (ieee_is_finite(upper)) then
+            dp=max(min_dp,p_int_native(i,k)-upper)
+            if (.not.ieee_is_finite(p_int_native(i,k))) dp=min_dp
+         endif
+         ! Prevent negative pressure near the model top. The 0.01 Pa
+         ! minimum is feasible only when sufficient positive pressure remains.
+         dp=min(dp,0.5_RKIND*low)
+         p_int_gfs(i,k+1)=low-dp
+         mid=p_mid_native(i,k)
+         if (.not.ieee_is_finite(mid)) then
+            mid=0.5_RKIND*(low+p_int_gfs(i,k+1))
+         else if (mid >= low .or. mid <= p_int_gfs(i,k+1)) then
+            mid=0.5_RKIND*(low+p_int_gfs(i,k+1))
+         endif
+         p_mid_gfs(i,k)=mid
+         low=p_int_gfs(i,k+1)
+      enddo
+   enddo
+ end subroutine limit_gfs_pressure_thickness
 end module mpas_gfs_pressure_repair

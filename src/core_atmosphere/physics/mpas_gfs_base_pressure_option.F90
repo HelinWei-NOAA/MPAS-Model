@@ -4,6 +4,7 @@ module mpas_gfs_base_pressure_option
 
   public :: gfs_fixed_base_mode
   public :: gfs_mynn_style_mode
+  public :: gfs_local_dp_mode
   public :: gfs_pressure_mode
 
   logical, save :: initialized = .false.
@@ -29,8 +30,10 @@ contains
         pressure_mode = 1
       case ('2', 'mynn_style')
         pressure_mode = 2
+      case ('3', 'local_dp')
+        pressure_mode = 3
       case default
-        error stop 'MPAS_GFS_PRESSURE_MODE must be 0, 1, or 2'
+        error stop 'MPAS_GFS_PRESSURE_MODE must be 0, 1, 2, or 3'
       end select
     endif
 
@@ -54,5 +57,10 @@ contains
     call initialize_gfs_pressure_mode()
     gfs_mynn_style_mode = (pressure_mode == 2)
   end function gfs_mynn_style_mode
+
+  logical function gfs_local_dp_mode()
+    call initialize_gfs_pressure_mode()
+    gfs_local_dp_mode = (pressure_mode == 3)
+  end function gfs_local_dp_mode
 
 end module mpas_gfs_base_pressure_option

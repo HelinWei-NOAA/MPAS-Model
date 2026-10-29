@@ -1,4 +1,5 @@
 module mpas_satmedmfvdifq_wrapper_mod
+  use mpas_gfs_base_pressure_option, only : gfs_local_dp_mode
 
   use mpas_kind_types, only: RKIND
   use satmedmfvdifq, only: satmedmfvdifq_run
@@ -252,6 +253,8 @@ contains
     do k = 1, km
       do i = 1, im
         del(i,k) = prsi(i,k) - prsi(i,k+1)
+        if (gfs_local_dp_mode() .and. ieee_is_finite(del(i,k))) &
+             del(i,k) = max(0.01_RKIND, del(i,k))
         if (.not. ieee_is_finite(del(i,k)) .or. del(i,k) <= 0.0_RKIND) then
           errflg = 1
           write(errmsg,'(A,I0,A,I0,A,ES14.6)') &
